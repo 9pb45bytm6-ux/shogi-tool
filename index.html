@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>将棋 局面分析ツール</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;800&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #fbf6ea;
@@ -20,56 +23,72 @@
   * { box-sizing: border-box; }
   body {
     font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", sans-serif;
-    background: var(--bg);
+    background: linear-gradient(175deg, #f8f3e7 0%, #f1e7d2 55%, #ece0c6 100%);
+    background-attachment: fixed;
     color: var(--ink);
     margin: 0;
     padding: 16px;
+    min-height: 100vh;
   }
   .wrap { max-width: 820px; margin: 0 auto; }
-  h1 { font-size: 20px; font-weight: 800; margin: 0 0 4px; }
-  .subtitle { font-size: 12px; color: var(--sub); margin-bottom: 16px; }
-  .tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--border); margin-bottom: 16px; flex-wrap: wrap; }
+  h1 {
+    font-family: "Shippori Mincho", serif;
+    font-size: 24px; font-weight: 800; margin: 0 0 4px; letter-spacing: 0.02em;
+  }
+  .subtitle { font-size: 12px; color: var(--sub); margin-bottom: 18px; }
+  .tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--border); margin-bottom: 18px; flex-wrap: wrap; }
   .tab {
     padding: 8px 14px; cursor: pointer; font-weight: 700; font-size: 14px;
     color: var(--sub); border-bottom: 3px solid transparent; margin-bottom: -2px;
+    transition: color 0.15s;
   }
   .tab.active { color: var(--ink); border-bottom-color: var(--accent); }
   .panel { display: none; }
   .panel.active { display: block; }
   textarea, input[type=text] {
-    width: 100%; font-family: inherit; font-size: 13px; padding: 8px;
-    border: 1px solid var(--border); border-radius: 6px; background: #fffdf7; color: var(--ink);
+    width: 100%; font-family: inherit; font-size: 13px; padding: 9px 10px;
+    border: 1px solid var(--border); border-radius: 7px; background: #fffdf9; color: var(--ink);
   }
   textarea { min-height: 160px; resize: vertical; }
   button {
     font-family: inherit; font-size: 13px; font-weight: 700; padding: 8px 16px;
-    border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff;
-    cursor: pointer;
+    border-radius: 7px; border: 1px solid var(--accent); background: var(--accent); color: #fff;
+    cursor: pointer; box-shadow: 0 1px 2px rgba(58,46,24,0.15);
   }
-  button.secondary { background: #fff; color: var(--accent); }
+  button.secondary { background: #fff; color: var(--accent); box-shadow: none; }
   button:disabled { opacity: 0.5; cursor: default; }
   .card {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-    padding: 12px 16px; margin-bottom: 10px;
+    background: #fffdf9;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 6px rgba(58,46,24,0.06), 0 1px 2px rgba(58,46,24,0.05);
   }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .row > * { margin: 0; }
   label { font-size: 12px; color: var(--sub); display: block; margin-bottom: 4px; }
   .small { font-size: 12px; color: var(--sub); }
-  .board-table { border-collapse: collapse; }
+  .board-table {
+    border-collapse: collapse;
+    box-shadow: 0 2px 8px rgba(58,46,24,0.10);
+    border-radius: 4px;
+  }
   .board-table td {
     width: 30px; height: 32px; border: 1px solid var(--board-line);
     background: var(--board-bg); text-align: center; font-size: 15px; font-weight: 700;
     font-family: serif;
   }
-  .board-table .label { border: none; background: transparent; font-size: 11px; color: var(--sub); width: 20px; }
+  .board-table .label { border: none; background: transparent; font-size: 11px; color: var(--sub); width: 20px; box-shadow: none; }
   .gote-piece { color: var(--lose); transform: rotate(180deg); display: inline-block; }
   .edge-item {
-    display: flex; justify-content: space-between; align-items: center; padding: 8px 12px;
-    border-radius: 6px; background: var(--panel); border: 1px solid var(--border); cursor: pointer;
-    margin-bottom: 6px;
+    display: flex; justify-content: space-between; align-items: center; padding: 9px 14px;
+    border-radius: 7px; background: #fffdf9; border: 1px solid var(--border); cursor: pointer;
+    margin-bottom: 6px; box-shadow: 0 1px 3px rgba(58,46,24,0.05);
+    transition: box-shadow 0.15s;
   }
-  .edge-item.disabled { background: #f0f0f0; cursor: default; }
+  .edge-item:hover { box-shadow: 0 2px 6px rgba(58,46,24,0.10); }
+  .edge-item.disabled { background: #f0ede4; cursor: default; box-shadow: none; }
   .edge-move { font-weight: 700; color: var(--ink); }
   .edge-stat { font-size: 12px; color: #777; }
   table.data { border-collapse: collapse; width: 100%; font-size: 12px; }
@@ -446,10 +465,14 @@ function renderImportTab() {
       document.getElementById("importPreview").innerHTML = `<div class="warn">「開始日時：」を含む棋譜ブロックが見つからなかった。将棋ウォーズの棋譜をそのまま貼り付けてほしい。</div>`;
       return;
     }
+    const seenInBatch = new Set();
     pendingImports = blocks.map(b => {
       const parsed = parseBlock(b);
       const { tktSide, result } = computeResult(parsed, MYNAMES);
-      const dup = GAMES.some(g => g.startTime === parsed.startTime);
+      const inStorage = GAMES.some(g => g.startTime === parsed.startTime);
+      const inBatch = parsed.startTime && seenInBatch.has(parsed.startTime);
+      const dup = inStorage || inBatch;
+      if (parsed.startTime) seenInBatch.add(parsed.startTime);
       return { parsed, tktSide, result, kaikei: "", dup };
     });
     renderImportPreview();
@@ -769,6 +792,12 @@ function renderSettingsTab() {
       </div>
       <div class="hint">端末やブラウザを変える時は、書き出したJSONファイルを新しい環境で読み込めばデータを引き継げる。</div>
     </div>
+    <div class="card">
+      <div class="small" style="margin-bottom:8px;">重複データのチェック</div>
+      <div class="hint" style="margin-bottom:8px;">開始日時が完全に一致する対局が複数登録されていないか確認する。過去に同じ棋譜を2回貼り付けてしまった場合などに使う。</div>
+      <button class="secondary" id="btnCheckDup">重複をチェックする</button>
+      <div id="dupResult" style="margin-top:10px;"></div>
+    </div>
   `;
   document.getElementById("btnSaveNames").onclick = () => {
     MYNAMES = document.getElementById("myNamesInput").value.split(",").map(s=>s.trim()).filter(Boolean);
@@ -796,6 +825,45 @@ function renderSettingsTab() {
       }
     };
     reader.readAsText(file);
+  };
+
+  document.getElementById("btnCheckDup").onclick = () => {
+    const groups = {};
+    GAMES.forEach(g => {
+      const key = g.startTime || "(日時不明)";
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(g);
+    });
+    const dupGroups = Object.entries(groups).filter(([, list]) => list.length > 1);
+    const box = document.getElementById("dupResult");
+    if (dupGroups.length === 0) {
+      box.innerHTML = `<div class="tip">重複は見つからなかった。</div>`;
+      return;
+    }
+    let html = `<div class="warn">${dupGroups.length}件の開始日時で重複が見つかった。それぞれ1件だけ残して削除できる。</div>`;
+    dupGroups.forEach(([key, list]) => {
+      html += `<div class="edge-item" style="flex-direction:column; align-items:flex-start; cursor:default;">
+        <div class="small" style="font-weight:700;">${key} ｜ ${list[0].sente||"?"} vs ${list[0].gote||"?"} ｜ ${list.length}件重複</div>
+        <button class="secondary" data-dupkey="${key}" style="margin-top:6px; padding:4px 10px; font-size:11px;">最初の1件だけ残して削除</button>
+      </div>`;
+    });
+    box.innerHTML = html;
+    box.querySelectorAll("[data-dupkey]").forEach(btn => {
+      btn.onclick = () => {
+        const key = btn.dataset.dupkey;
+        if (!confirm(`「${key}」の重複分を削除する（1件だけ残す）。よろしいか?`)) return;
+        let kept = false;
+        GAMES = GAMES.filter(g => {
+          const k = g.startTime || "(日時不明)";
+          if (k !== key) return true;
+          if (!kept) { kept = true; return true; }
+          return false;
+        });
+        saveGames(GAMES);
+        updateSummaryLine();
+        document.getElementById("btnCheckDup").click();
+      };
+    });
   };
 }
 
