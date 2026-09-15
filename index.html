@@ -609,12 +609,12 @@ function renderSearchTab() {
         <option value="S">先手ツリー</option>
         <option value="G">後手ツリー</option>
       </select>
-      <label style="display:inline; margin:0;">局数<input type="number" id="searchMinN" value="2" min="1" style="width:60px; display:inline-block;">局以上</label>
+      <label style="display:inline; margin:0;">局数<input type="number" id="searchMinN" value="2" min="1" style="width:60px; display:inline-block;" onfocus="this.select()">局以上</label>
       <select id="searchRateOp">
         <option value="gte">勝率 以上</option>
         <option value="lt">勝率 未満</option>
       </select>
-      <input type="number" id="searchRateVal" value="50" min="0" max="100" style="width:60px;">%
+      <input type="number" id="searchRateVal" placeholder="未指定" min="0" max="100" style="width:70px;" onfocus="this.select()">%
       <button id="btnSearch">検索</button>
     </div>
     <div id="searchResults" class="small">条件を指定して検索してほしい。</div>
@@ -624,7 +624,8 @@ function renderSearchTab() {
     const treeSel = document.getElementById("searchTreeSel").value;
     const minN = parseInt(document.getElementById("searchMinN").value,10) || 1;
     const rateOp = document.getElementById("searchRateOp").value;
-    const rateVal = parseInt(document.getElementById("searchRateVal").value,10) || 0;
+    const rateValRaw = document.getElementById("searchRateVal").value;
+    const rateVal = rateValRaw === "" ? null : parseInt(rateValRaw,10);
     const sides = treeSel === "both" ? ["S","G"] : [treeSel];
     const results = [];
     sides.forEach(sk => {
@@ -635,8 +636,10 @@ function renderSearchTab() {
           const e = node.edges[move];
           if (e.n < minN) continue;
           const rate = e.n>0 ? (e.w/e.n)*100 : 0;
-          if (rateOp==="gte" && rate<rateVal) continue;
-          if (rateOp==="lt" && rate>=rateVal) continue;
+          if (rateVal !== null) {
+            if (rateOp==="gte" && rate<rateVal) continue;
+            if (rateOp==="lt" && rate>=rateVal) continue;
+          }
           results.push({ sk, hash, move, n:e.n, w:e.w, rate:Math.round(rate), mover:e.side });
         }
       }
