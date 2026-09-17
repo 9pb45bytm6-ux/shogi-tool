@@ -405,34 +405,62 @@ function onHandClick(piece, side) {
 }
 
 /* ---------- タブ: 新規研究/編集 ---------- */
+function findMatchingResearches(rootHash) {
+  return loadResearches().filter(r => r.root === rootHash);
+}
+
 function renderEditorTab() {
   const el = document.getElementById("panel-editor");
   if (!CURRENT) {
-    let handoffInfo = "";
+    let handoffData = null;
     try {
       const raw = localStorage.getItem(LS_HANDOFF);
-      if (raw) handoffInfo = `<div class="tip">サイト1から渡された局面が見つかった。「サイト1の局面から始める」を押すとその続きから研究できる。</div>`;
+      if (raw) handoffData = JSON.parse(raw);
     } catch(e){}
-    el.innerHTML = `
-      <div class="card">
-        ${handoffInfo}
-        <div class="row">
-          <button id="btnFromHandoff" ${handoffInfo?"":"disabled"}>サイト1の局面から始める</button>
-          <button class="secondary" id="btnFromScratch">初期局面から新規に始める</button>
-        </div>
-      </div>`;
+
+    let html = `<div class="card">`;
+    if (handoffData) {
+      const incomingHash = encodeStateCompact(handoffData.board, handoffData.hands, handoffData.turn);
+      const matches = findMatchingResearches(incomingHash);
+      if (matches.length > 0) {
+        html += `<div class="tip">サイト1から渡された局面は、既存の研究(${matches.length}件)と同じ開始局面。続きを書き足すか、別の新規研究として作るか選べる。</div>`;
+        matches.forEach(m => {
+          html += `<div class="edge-item" data-continueid="${m.id}">
+            <span>${m.title || "(無題)"} ｜ ${(m.createdAt||"").slice(0,10)}</span>
+            <span class="small">この研究に続きを追記する</span>
+          </div>`;
+        });
+        html += `<div class="row" style="margin-top:8px;">
+          <button id="btnFromHandoffNew">同じ局面から別の新規研究として始める</button>
+        </div>`;
+      } else {
+        html += `<div class="tip">サイト1から渡された局面が見つかった。</div>`;
+        html += `<div class="row"><button id="btnFromHandoffNew">サイト1の局面から始める</button></div>`;
+      }
+    }
+    html += `<div class="row" style="margin-top:8px;"><button class="secondary" id="btnFromScratch">初期局面から新規に始める</button></div>`;
+    html += `</div>`;
+    el.innerHTML = html;
+
     document.getElementById("btnFromScratch").onclick = () => {
       CURRENT = newEmptyResearch(); PATH = []; SELECTED = null; renderEditorTab();
     };
-    const bh = document.getElementById("btnFromHandoff");
-    if (bh) bh.onclick = () => {
-      try {
-        const data = JSON.parse(localStorage.getItem(LS_HANDOFF));
-        CURRENT = newResearchFromPosition(data.board, data.hands, data.turn, data.sourceNote || "サイト1より");
-        localStorage.removeItem(LS_HANDOFF);
-        PATH = []; SELECTED = null; renderEditorTab();
-      } catch(e) { alert("局面データの読み込みに失敗した。"); }
+    const bhNew = document.getElementById("btnFromHandoffNew");
+    if (bhNew) bhNew.onclick = () => {
+      CURRENT = newResearchFromPosition(handoffData.board, handoffData.hands, handoffData.turn, handoffData.sourceNote || "サイト1より");
+      localStorage.removeItem(LS_HANDOFF);
+      PATH = []; SELECTED = null; renderEditorTab();
     };
+    el.querySelectorAll("[data-continueid]").forEach(item => {
+      item.onclick = () => {
+        const list = loadResearches();
+        const found = list.find(r => String(r.id) === item.dataset.continueid);
+        if (!found) return;
+        CURRENT = found; PATH = []; SELECTED = null;
+        localStorage.removeItem(LS_HANDOFF);
+        renderEditorTab();
+      };
+    });
     return;
   }
 
