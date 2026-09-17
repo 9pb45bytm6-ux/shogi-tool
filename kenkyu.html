@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>将棋 研究保存ツール</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fbf6ea; --panel: #fdf6e6; --border: #e3d3a8; --ink: #3a2e18; --sub: #8a7a5c;
+    --accent: #8a6d3b; --board-bg: #f2dcae; --board-line: #a98d5c; --win: #3d6b2e; --lose: #8a2e2e;
+    --highlight: #c9e6a8; --select: #f6c85c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", sans-serif;
+    background: linear-gradient(175deg, #f8f3e7 0%, #f1e7d2 55%, #ece0c6 100%);
+    background-attachment: fixed; color: var(--ink); margin: 0; padding: 16px;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; }
+  h1 { font-family: "Shippori Mincho", serif; font-size: 22px; font-weight: 800; margin: 0 0 4px; }
+  .subtitle { font-size: 12px; color: var(--sub); margin-bottom: 16px; }
+  .tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--border); margin-bottom: 16px; flex-wrap: wrap; }
+  .tab { padding: 8px 14px; cursor: pointer; font-weight: 700; font-size: 14px; color: var(--sub); border-bottom: 3px solid transparent; margin-bottom: -2px; }
+  .tab.active { color: var(--ink); border-bottom-color: var(--accent); }
+  .panel { display: none; } .panel.active { display: block; }
+  textarea, input[type=text] { width: 100%; font-family: inherit; font-size: 13px; padding: 8px; border: 1px solid var(--border); border-radius: 7px; background: #fffdf9; color: var(--ink); }
+  textarea { min-height: 60px; resize: vertical; }
+  button { font-family: inherit; font-size: 13px; font-weight: 700; padding: 8px 16px; border-radius: 7px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; box-shadow: 0 1px 2px rgba(58,46,24,0.15); }
+  button.secondary { background: #fff; color: var(--accent); box-shadow: none; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .card { background: #fffdf9; border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin-bottom: 12px; box-shadow: 0 2px 6px rgba(58,46,24,0.06); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .small { font-size: 12px; color: var(--sub); }
+  .board-table { border-collapse: collapse; box-shadow: 0 2px 8px rgba(58,46,24,0.10); }
+  .board-table td { width: 32px; height: 34px; border: 1px solid var(--board-line); background: var(--board-bg); text-align: center; font-size: 16px; font-weight: 700; font-family: serif; cursor: default; position: relative; }
+  .board-table .label { border: none; background: transparent; font-size: 11px; color: var(--sub); width: 20px; box-shadow: none; }
+  .board-table td.clickable { cursor: pointer; }
+  .board-table td.selected { background: var(--select); }
+  .board-table td.target { background: var(--highlight); }
+  .gote-piece { color: var(--lose); transform: rotate(180deg); display: inline-block; }
+  .hand-piece { display: inline-block; padding: 4px 10px; margin: 2px; border-radius: 6px; border: 1px solid var(--border); background: #fffdf9; cursor: pointer; font-size: 13px; }
+  .hand-piece.selected { background: var(--select); }
+  .hand-piece.disabled { opacity: 0.3; cursor: default; }
+  .edge-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-radius: 7px; background: #fffdf9; border: 1px solid var(--border); cursor: pointer; margin-bottom: 6px; }
+  .crumb { font-size: 13px; color: var(--sub); line-height: 1.8; margin-bottom: 10px; }
+  .crumb a { color: var(--accent); cursor: pointer; font-weight: 600; }
+  .flex-gap { display: flex; gap: 24px; flex-wrap: wrap; }
+  .warn { background: #fbeee6; border: 1px solid #e3b898; color: #8a4a2e; padding: 8px 12px; border-radius: 8px; font-size: 12px; margin-bottom: 10px; }
+  .tip { background: #f4f7ee; border: 1px solid #cfe0b6; color: #3d6b2e; padding: 8px 12px; border-radius: 8px; font-size: 12px; margin-bottom: 10px; }
+  table.data { border-collapse: collapse; width: 100%; font-size: 12px; }
+  table.data th { background: var(--accent); color: #fff; padding: 6px 8px; text-align: left; }
+  table.data td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>将棋 研究保存ツール</h1>
+  <div class="subtitle" id="summaryLine">局面をタップして手を進め、研究手順を分岐ツリーとして保存できる（姉妹サイト）</div>
+  <div class="tabs">
+    <div class="tab active" data-tab="editor">新規研究 / 編集</div>
+    <div class="tab" data-tab="list">保存済み研究</div>
+    <div class="tab" data-tab="settings">設定</div>
+  </div>
+  <div class="panel active" id="panel-editor"></div>
+  <div class="panel" id="panel-list"></div>
+  <div class="panel" id="panel-settings"></div>
+</div>
+
+<script>
+/* =========================================================
+   将棋 完全ルールエンジン (rules.js を1ファイルに統合したもの)
+   ========================================================= */
+const PIECE_CODE = {"歩":"P","香":"L","桂":"N","銀":"S","金":"G","角":"B","飛":"R","玉":"K","王":"K",
+  "と":"t","成香":"l","成桂":"n","成銀":"s","馬":"b","龍":"r","竜":"r"};
+const CODE_TO_JP = {P:"歩",L:"香",N:"桂",S:"銀",G:"金",B:"角",R:"飛",K:"玉",t:"と",l:"成香",n:"成桂",s:"成銀",b:"馬",r:"龍"};
+const BASE_OF_PROMOTED = {"と":"歩","成香":"香","成桂":"桂","成銀":"銀","馬":"角","龍":"飛","竜":"飛"};
+const PROMOTED_OF_BASE = {"歩":"と","香":"成香","桂":"成桂","銀":"成銀","角":"馬","飛":"龍"};
+const PROMOTABLE_BASE = new Set(["歩","香","桂","銀","角","飛"]);
+const DROPPABLE_KINDS = ["歩","香","桂","銀","金","角","飛"];
+const ZEN = "１２３４５６７８９"; const KAN = "一二三四五六七八九";
+const FILES = [9,8,7,6,5,4,3,2,1]; const RANKS = ["一","二","三","四","五","六","七","八","九"];
+
+function key(c,r){ return c+","+r; }
+function initialBoard() {
+  const board = {}; const back = ["香","桂","銀","金","玉","金","銀","桂","香"];
+  for (let i=0;i<9;i++) { const col=i+1; board[key(col,1)]=["G",back[i]]; board[key(col,9)]=["S",back[i]]; }
+  board[key(8,2)]=["G","飛"]; board[key(2,2)]=["G","角"]; board[key(2,8)]=["S","飛"]; board[key(8,8)]=["S","角"];
+  for (let col=1; col<=9; col++) { board[key(col,3)]=["G","歩"]; board[key(col,7)]=["S","歩"]; }
+  return board;
+}
+function cloneBoard(board){ const b={}; for (const k in board) b[k]=board[k].slice(); return b; }
+function cloneHands(hands){ return { S: Object.assign({},hands.S), G: Object.assign({},hands.G) }; }
+function forwardDelta(side){ return side==="S" ? -1 : 1; }
+function promotionZoneRows(side){ return side==="S" ? [1,2,3] : [7,8,9]; }
+function farthestRow(side){ return side==="S" ? 1 : 9; }
+function farthestTwoRows(side){ return side==="S" ? [1,2] : [8,9]; }
+function inBounds(c,r){ return c>=1 && c<=9 && r>=1 && r<=9; }
+
+function steppingDeltas(pieceBase, side) {
+  const F = forwardDelta(side);
+  switch (pieceBase) {
+    case "歩": return [[0,F]];
+    case "桂": return [[-1,2*F],[1,2*F]];
+    case "銀": return [[0,F],[-1,F],[1,F],[-1,-F],[1,-F]];
+    case "金": case "と": case "成香": case "成桂": case "成銀": return [[0,F],[-1,F],[1,F],[-1,0],[1,0],[0,-F]];
+    case "玉": case "王": return [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+    default: return null;
+  }
+}
+function slidingDirs(pieceBase) {
+  switch (pieceBase) {
+    case "香": return { forwardOnly:true };
+    case "角": return { dirs: [[1,1],[1,-1],[-1,1],[-1,-1]] };
+    case "飛": return { dirs: [[1,0],[-1,0],[0,1],[0,-1]] };
+    case "馬": return { dirs: [[1,1],[1,-1],[-1,1],[-1,-1]], extraStep: [[1,0],[-1,0],[0,1],[0,-1]] };
+    case "龍": return { dirs: [[1,0],[-1,0],[0,1],[0,-1]], extraStep: [[1,1],[1,-1],[-1,1],[-1,-1]] };
+    default: return null;
+  }
+}
+const SLIDING_PIECES = new Set(["香","角","飛","馬","龍"]);
+
+function pieceTargets(board, col, row, side, pieceBase) {
+  const targets = [];
+  if (SLIDING_PIECES.has(pieceBase)) {
+    const info = slidingDirs(pieceBase);
+    const walk = (dc,dr) => {
+      let c=col+dc, r=row+dr;
+      while (inBounds(c,r)) {
+        const occ = board[key(c,r)];
+        if (!occ) { targets.push([c,r]); } else { if (occ[0] !== side) targets.push([c,r]); break; }
+        c+=dc; r+=dr;
+      }
+    };
+    if (pieceBase === "香") { const F = forwardDelta(side); walk(0,F); }
+    else {
+      info.dirs.forEach(([dc,dr]) => walk(dc,dr));
+      if (info.extraStep) info.extraStep.forEach(([dc,dr]) => {
+        const c=col+dc, r=row+dr; if (!inBounds(c,r)) return;
+        const occ = board[key(c,r)]; if (!occ || occ[0]!==side) targets.push([c,r]);
+      });
+    }
+  } else {
+    steppingDeltas(pieceBase, side).forEach(([dc,dr]) => {
+      const c=col+dc, r=row+dr; if (!inBounds(c,r)) return;
+      const occ = board[key(c,r)]; if (!occ || occ[0]!==side) targets.push([c,r]);
+    });
+  }
+  return targets;
+}
+function findKing(board, side) {
+  for (const k in board) { const [owner,piece]=board[k]; if (owner===side && (piece==="玉"||piece==="王")) return k.split(",").map(Number); }
+  return null;
+}
+function isSquareAttacked(board, col, row, bySide) {
+  for (const k in board) {
+    const [owner, piece] = board[k]; if (owner !== bySide) continue;
+    const [c,r] = k.split(",").map(Number);
+    if (pieceTargets(board, c, r, owner, piece).some(([tc,tr]) => tc===col && tr===row)) return true;
+  }
+  return false;
+}
+function isInCheck(board, side) {
+  const kp = findKing(board, side); if (!kp) return false;
+  return isSquareAttacked(board, kp[0], kp[1], side==="S"?"G":"S");
+}
+function mustPromote(pieceBase, side, toRow) {
+  if (pieceBase==="歩" || pieceBase==="香") return toRow === farthestRow(side);
+  if (pieceBase==="桂") return farthestTwoRows(side).includes(toRow);
+  return false;
+}
+function dropForbiddenSquare(pieceBase, side, toRow) {
+  if (pieceBase==="歩" || pieceBase==="香") return toRow === farthestRow(side);
+  if (pieceBase==="桂") return farthestTwoRows(side).includes(toRow);
+  return false;
+}
+function hasNifu(board, side, col) {
+  for (let r=1;r<=9;r++) { const occ = board[key(col,r)]; if (occ && occ[0]===side && occ[1]==="歩") return true; }
+  return false;
+}
+function generatePseudoLegalMoves(board, hands, side) {
+  const moves = [];
+  for (const k in board) {
+    const [owner, piece] = board[k]; if (owner !== side) continue;
+    const [col,row] = k.split(",").map(Number);
+    const base = BASE_OF_PROMOTED[piece] || piece; const isPromoted = !!BASE_OF_PROMOTED[piece];
+    pieceTargets(board, col, row, side, piece).forEach(([tc,tr]) => {
+      const capture = !!board[key(tc,tr)];
+      const zoneRows = promotionZoneRows(side);
+      const eligible = !isPromoted && PROMOTABLE_BASE.has(base) && (zoneRows.includes(row) || zoneRows.includes(tr));
+      const forced = eligible && mustPromote(base, side, tr);
+      if (eligible && !forced) moves.push({ type:"move", from:[col,row], to:[tc,tr], piece, promote:false, capture });
+      if (eligible) moves.push({ type:"move", from:[col,row], to:[tc,tr], piece, promote:true, capture });
+      if (!eligible) moves.push({ type:"move", from:[col,row], to:[tc,tr], piece, promote:false, capture });
+    });
+  }
+  DROPPABLE_KINDS.forEach(pieceBase => {
+    const count = hands[side][PIECE_CODE[pieceBase]] || 0; if (count <= 0) return;
+    for (let c=1;c<=9;c++) for (let r=1;r<=9;r++) {
+      if (board[key(c,r)]) continue;
+      if (dropForbiddenSquare(pieceBase, side, r)) continue;
+      if (pieceBase==="歩" && hasNifu(board, side, c)) continue;
+      moves.push({ type:"drop", piece:pieceBase, to:[c,r] });
+    }
+  });
+  return moves;
+}
+function applyMoveObj(board, hands, side, mv) {
+  if (mv.type === "drop") {
+    const code = PIECE_CODE[mv.piece];
+    hands[side][code] -= 1; if (hands[side][code] <= 0) delete hands[side][code];
+    board[key(mv.to[0],mv.to[1])] = [side, mv.piece];
+  } else {
+    const fromKey = key(mv.from[0],mv.from[1]); const toKey = key(mv.to[0],mv.to[1]);
+    if (board[toKey]) {
+      const [capOwner, capPiece] = board[toKey];
+      const base = BASE_OF_PROMOTED[capPiece] || capPiece; const code = PIECE_CODE[base];
+      hands[side][code] = (hands[side][code]||0) + 1;
+    }
+    let finalPiece = mv.piece;
+    if (mv.promote) { const base = BASE_OF_PROMOTED[mv.piece] || mv.piece; finalPiece = PROMOTED_OF_BASE[base]; }
+    delete board[fromKey]; board[toKey] = [side, finalPiece];
+  }
+}
+function isUchifuzume(board, hands, side) {
+  const opp = side==="S" ? "G" : "S";
+  if (!isInCheck(board, opp)) return false;
+  return legalMoves(board, hands, opp).length === 0;
+}
+function legalMoves(board, hands, side) {
+  const pseudo = generatePseudoLegalMoves(board, hands, side);
+  const legal = [];
+  for (const mv of pseudo) {
+    const b2 = cloneBoard(board); const h2 = cloneHands(hands);
+    applyMoveObj(b2, h2, side, mv);
+    if (isInCheck(b2, side)) continue;
+    if (mv.type==="drop" && mv.piece==="歩" && isUchifuzume(b2, hands, side)) continue;
+    legal.push(mv);
+  }
+  return legal;
+}
+function isCheckmate(board, hands, side) { return isInCheck(board, side) && legalMoves(board, hands, side).length === 0; }
+function encodeStateCompact(board, hands, turn) {
+  let s = "";
+  for (let r=1;r<=9;r++) for (let c=1;c<=9;c++) {
+    const cell = board[key(c,r)];
+    s += cell ? (cell[0] + PIECE_CODE[cell[1]]) : "..";
+  }
+  const handStr = (h) => Object.keys(h).sort().filter(k=>h[k]).map(k=>k+h[k]).join(",");
+  return s + "|" + handStr(hands.S) + "|" + handStr(hands.G) + "|" + turn;
+}
+function moveToNotation(mv) {
+  const [tc,tr] = mv.to;
+  const pieceName = mv.piece;
+  let s = ZEN[tc-1] + KAN[tr-1] + pieceName;
+  if (mv.type === "drop") return s + "打";
+  if (mv.promote) s += "成";
+  return s + "(" + mv.from[0] + mv.from[1] + ")";
+}
+
+/* =========================================================
+   アプリ本体
+   ========================================================= */
+const LS_RESEARCHES = "kenkyu_researches_v1";
+const LS_HANDOFF = "shogi_handoff"; // サイト1から渡される局面
+
+function loadResearches() { try { return JSON.parse(localStorage.getItem(LS_RESEARCHES)) || []; } catch(e){ return []; } }
+function saveResearches(list) { localStorage.setItem(LS_RESEARCHES, JSON.stringify(list)); }
+
+let CURRENT = null; // 編集中の研究データ { id, title, createdAt, sourceNote, root, nodes }
+let PATH = []; // [{mv, hash}] ルートからの現在地
+let SELECTED = null; // {type:'board', from:[c,r]} | {type:'hand', piece}
+
+function newEmptyResearch(sourceNote) {
+  const board = initialBoard();
+  const hands = { S:{}, G:{} };
+  const rootHash = encodeStateCompact(board, hands, "S");
+  return {
+    id: null,
+    title: "",
+    createdAt: new Date().toISOString(),
+    sourceNote: sourceNote || "新規(初期局面)",
+    root: rootHash,
+    nodes: { [rootHash]: { board, hands, turn:"S", edges:{}, note:"" } },
+  };
+}
+
+function newResearchFromPosition(board, hands, turn, sourceNote) {
+  const rootHash = encodeStateCompact(board, hands, turn);
+  return {
+    id: null, title: "", createdAt: new Date().toISOString(), sourceNote: sourceNote || "局面から開始",
+    root: rootHash, nodes: { [rootHash]: { board, hands, turn, edges:{}, note:"" } },
+  };
+}
+
+function currentNode() {
+  const hash = PATH.length ? PATH[PATH.length-1].hash : CURRENT.root;
+  return CURRENT.nodes[hash];
+}
+function currentHash() { return PATH.length ? PATH[PATH.length-1].hash : CURRENT.root; }
+
+function playMove(mv) {
+  const node = currentNode();
+  const b2 = cloneBoard(node.board); const h2 = cloneHands(node.hands);
+  applyMoveObj(b2, h2, node.turn, mv);
+  const nextTurn = node.turn === "S" ? "G" : "S";
+  const newHash = encodeStateCompact(b2, h2, nextTurn);
+  if (!CURRENT.nodes[newHash]) {
+    CURRENT.nodes[newHash] = { board: b2, hands: h2, turn: nextTurn, edges:{}, note:"" };
+  }
+  const mvKey = JSON.stringify(mv);
+  node.edges[mvKey] = { mv, to: newHash };
+  PATH.push({ mv, hash: newHash });
+  SELECTED = null;
+}
+
+/* ---------- 盤面レンダリング(タップ操作つき) ---------- */
+function renderBoardHTML(node) {
+  const renderHand = (side) => {
+    const h = node.hands[side] || {};
+    const order = ["R","B","G","S","N","L","P"];
+    const isMyTurn = side === node.turn;
+    let html = "";
+    order.forEach(code => {
+      const n = h[code]; if (!n) return;
+      const pieceName = CODE_TO_JP[code];
+      const isSel = SELECTED && SELECTED.type==="hand" && SELECTED.piece===pieceName && SELECTED.side===side;
+      const cls = "hand-piece" + (isSel?" selected":"") + (!isMyTurn?" disabled":"");
+      html += `<span class="${cls}" data-hand="${pieceName}" data-side="${side}">${pieceName}${n>1?"×"+n:""}</span>`;
+    });
+    return html || `<span class="small">なし</span>`;
+  };
+  let html = `<div style="display:inline-block;">`;
+  html += `<div class="small" style="margin-bottom:4px;">後手 持駒: ${renderHand("G")}</div>`;
+  html += `<table class="board-table"><tr><td class="label"></td>`;
+  FILES.forEach(f => html += `<td class="label">${f}</td>`);
+  html += `</tr>`;
+  const legal = legalMoves(node.board, node.hands, node.turn);
+  let targetSquares = [];
+  if (SELECTED) {
+    if (SELECTED.type === "board") {
+      targetSquares = legal.filter(m => m.type==="move" && m.from[0]===SELECTED.from[0] && m.from[1]===SELECTED.from[1]);
+    } else {
+      targetSquares = legal.filter(m => m.type==="drop" && m.piece===SELECTED.piece);
+    }
+  }
+  for (let ri=0; ri<9; ri++) {
+    const row = ri+1;
+    html += `<tr><td class="label">${RANKS[ri]}</td>`;
+    FILES.forEach(col => {
+      const cell = node.board[key(col,row)];
+      const isSelectedSq = SELECTED && SELECTED.type==="board" && SELECTED.from[0]===col && SELECTED.from[1]===row;
+      const isTarget = targetSquares.some(m => m.to[0]===col && m.to[1]===row);
+      let cls = "";
+      if (isSelectedSq) cls += " selected";
+      if (isTarget) cls += " target";
+      const clickable = (cell && cell[0]===node.turn) || isTarget;
+      if (clickable) cls += " clickable";
+      let content = "";
+      if (cell) {
+        const [owner, piece] = cell;
+        content = owner==="G" ? `<span class="gote-piece">${piece}</span>` : piece;
+      }
+      html += `<td class="${cls.trim()}" data-col="${col}" data-row="${row}">${content}</td>`;
+    });
+    html += `</tr>`;
+  }
+  html += `</table>`;
+  html += `<div class="small" style="margin-top:4px;">先手 持駒: ${renderHand("S")}</div>`;
+  html += `</div>`;
+  return html;
+}
+
+function onBoardCellClick(col, row) {
+  const node = currentNode();
+  const legal = legalMoves(node.board, node.hands, node.turn);
+  // 選択中で、かつここがターゲットなら着手
+  if (SELECTED) {
+    let candidates = [];
+    if (SELECTED.type === "board") {
+      candidates = legal.filter(m => m.type==="move" && m.from[0]===SELECTED.from[0] && m.from[1]===SELECTED.from[1] && m.to[0]===col && m.to[1]===row);
+    } else {
+      candidates = legal.filter(m => m.type==="drop" && m.piece===SELECTED.piece && m.to[0]===col && m.to[1]===row);
+    }
+    if (candidates.length === 1) { playMove(candidates[0]); renderEditorTab(); return; }
+    if (candidates.length === 2) {
+      const doPromote = confirm("成りますか？(OK=成る / キャンセル=成らない)");
+      const chosen = candidates.find(m => m.promote === doPromote) || candidates[0];
+      playMove(chosen); renderEditorTab(); return;
+    }
+  }
+  // 新規選択
+  const cell = node.board[key(col,row)];
+  if (cell && cell[0] === node.turn) { SELECTED = { type:"board", from:[col,row] }; }
+  else { SELECTED = null; }
+  renderEditorTab();
+}
+function onHandClick(piece, side) {
+  const node = currentNode();
+  if (side !== node.turn) return;
+  SELECTED = { type:"hand", piece, side };
+  renderEditorTab();
+}
+
+/* ---------- タブ: 新規研究/編集 ---------- */
+function renderEditorTab() {
+  const el = document.getElementById("panel-editor");
+  if (!CURRENT) {
+    let handoffInfo = "";
+    try {
+      const raw = localStorage.getItem(LS_HANDOFF);
+      if (raw) handoffInfo = `<div class="tip">サイト1から渡された局面が見つかった。「サイト1の局面から始める」を押すとその続きから研究できる。</div>`;
+    } catch(e){}
+    el.innerHTML = `
+      <div class="card">
+        ${handoffInfo}
+        <div class="row">
+          <button id="btnFromHandoff" ${handoffInfo?"":"disabled"}>サイト1の局面から始める</button>
+          <button class="secondary" id="btnFromScratch">初期局面から新規に始める</button>
+        </div>
+      </div>`;
+    document.getElementById("btnFromScratch").onclick = () => {
+      CURRENT = newEmptyResearch(); PATH = []; SELECTED = null; renderEditorTab();
+    };
+    const bh = document.getElementById("btnFromHandoff");
+    if (bh) bh.onclick = () => {
+      try {
+        const data = JSON.parse(localStorage.getItem(LS_HANDOFF));
+        CURRENT = newResearchFromPosition(data.board, data.hands, data.turn, data.sourceNote || "サイト1より");
+        localStorage.removeItem(LS_HANDOFF);
+        PATH = []; SELECTED = null; renderEditorTab();
+      } catch(e) { alert("局面データの読み込みに失敗した。"); }
+    };
+    return;
+  }
+
+  const node = currentNode();
+  const mated = isCheckmate(node.board, node.hands, node.turn);
+  const inCheck = !mated && isInCheck(node.board, node.turn);
+
+  let html = `<div class="card">
+    <div class="row" style="justify-content:space-between;">
+      <input type="text" id="titleInput" placeholder="この研究のタイトル(未入力可)" value="${(CURRENT.title||"").replace(/"/g,"&quot;")}" style="flex:1; min-width:160px;">
+      <button id="btnSaveResearch">保存</button>
+      <button class="secondary" id="btnCloseResearch">閉じる</button>
+    </div>
+    <div class="small" style="margin-top:6px;">開始: ${CURRENT.sourceNote}</div>
+  </div>`;
+
+  html += `<div class="crumb"><a id="crumbRoot">開始局面</a>`;
+  PATH.forEach((p,i) => { html += ` &gt; <a class="crumbLink" data-idx="${i+1}">${moveToNotation(p.mv)}</a>`; });
+  html += `</div>`;
+
+  if (mated) html += `<div class="warn">この局面、手番(${node.turn==="S"?"先手":"後手"})の詰みです。</div>`;
+  else if (inCheck) html += `<div class="warn">王手がかかっている。</div>`;
+
+  html += `<div class="flex-gap"><div>`;
+  html += renderBoardHTML(node);
+  html += `<textarea id="noteBox" placeholder="この局面のメモ(フォーカスを外すと自動保存)" style="margin-top:8px; width:280px;">${node.note||""}</textarea>`;
+  html += `</div>`;
+
+  html += `<div style="min-width:220px; flex:1;">`;
+  html += `<div class="small" style="font-weight:700; margin-bottom:6px;">${SELECTED?"移動先(または同じ駒を再タップで選択解除)をタップ":"駒か持ち駒をタップして手を選ぶ"}</div>`;
+  const edges = Object.values(node.edges);
+  if (edges.length) {
+    html += `<div class="small" style="font-weight:700; margin:10px 0 6px;">この局面から記録済みの手</div>`;
+    edges.forEach(e => {
+      html += `<div class="edge-item" data-edgekey="${encodeURIComponent(JSON.stringify(e.mv))}">
+        <span>${moveToNotation(e.mv)}</span>
+        <span class="small">${CURRENT.nodes[e.to].note ? "📝" : ""}</span>
+      </div>`;
+    });
+  }
+  html += `</div></div>`;
+
+  el.innerHTML = html;
+
+  el.querySelectorAll("td.clickable").forEach(td => {
+    td.onclick = () => onBoardCellClick(parseInt(td.dataset.col,10), parseInt(td.dataset.row,10));
+  });
+  el.querySelectorAll("[data-hand]").forEach(span => {
+    if (span.classList.contains("disabled")) return;
+    span.onclick = () => onHandClick(span.dataset.hand, span.dataset.side);
+  });
+  document.getElementById("crumbRoot").onclick = () => { PATH=[]; SELECTED=null; renderEditorTab(); };
+  el.querySelectorAll(".crumbLink").forEach(a => {
+    a.onclick = () => { PATH = PATH.slice(0, parseInt(a.dataset.idx,10)); SELECTED=null; renderEditorTab(); };
+  });
+  el.querySelectorAll("[data-edgekey]").forEach(item => {
+    item.onclick = () => {
+      const mv = JSON.parse(decodeURIComponent(item.dataset.edgekey));
+      const node2 = currentNode();
+      const edge = node2.edges[JSON.stringify(mv)];
+      PATH.push({ mv, hash: edge.to }); SELECTED=null; renderEditorTab();
+    };
+  });
+  const noteBox = document.getElementById("noteBox");
+  if (noteBox) noteBox.onblur = (e) => { currentNode().note = e.target.value; };
+  document.getElementById("titleInput").oninput = (e) => { CURRENT.title = e.target.value; };
+  document.getElementById("btnCloseResearch").onclick = () => {
+    if (!confirm("保存してないと変更は失われる。閉じる?")) return;
+    CURRENT = null; PATH = []; SELECTED = null; renderEditorTab();
+  };
+  document.getElementById("btnSaveResearch").onclick = () => {
+    const list = loadResearches();
+    if (CURRENT.id) {
+      const idx = list.findIndex(r => r.id === CURRENT.id);
+      if (idx >= 0) list[idx] = CURRENT; else { CURRENT.id = Date.now(); list.push(CURRENT); }
+    } else {
+      CURRENT.id = Date.now();
+      list.push(CURRENT);
+    }
+    saveResearches(list);
+    alert("保存した。");
+  };
+}
+
+/* ---------- タブ: 保存済み研究 ---------- */
+function renderListTab() {
+  const el = document.getElementById("panel-list");
+  const list = loadResearches();
+  if (list.length === 0) { el.innerHTML = `<div class="small">まだ保存された研究がない。</div>`; return; }
+  let html = `<table class="data"><thead><tr><th>タイトル</th><th>開始</th><th>作成日</th><th></th></tr></thead><tbody>`;
+  list.slice().reverse().forEach(r => {
+    html += `<tr>
+      <td>${r.title || "(無題)"}</td>
+      <td>${r.sourceNote}</td>
+      <td>${(r.createdAt||"").slice(0,10)}</td>
+      <td>
+        <button class="secondary" data-openid="${r.id}" style="padding:3px 8px; font-size:11px;">開く</button>
+        <button class="secondary" data-delid="${r.id}" style="padding:3px 8px; font-size:11px;">削除</button>
+      </td>
+    </tr>`;
+  });
+  html += `</tbody></table>`;
+  el.innerHTML = html;
+  el.querySelectorAll("[data-openid]").forEach(btn => {
+    btn.onclick = () => {
+      const list2 = loadResearches();
+      const found = list2.find(r => String(r.id)===btn.dataset.openid);
+      if (!found) return;
+      CURRENT = found; PATH = []; SELECTED = null;
+      switchTab("editor");
+    };
+  });
+  el.querySelectorAll("[data-delid]").forEach(btn => {
+    btn.onclick = () => {
+      if (!confirm("この研究を削除する?")) return;
+      let list2 = loadResearches();
+      list2 = list2.filter(r => String(r.id)!==btn.dataset.delid);
+      saveResearches(list2);
+      renderListTab();
+    };
+  });
+}
+
+/* ---------- タブ: 設定 ---------- */
+function renderSettingsTab() {
+  const el = document.getElementById("panel-settings");
+  el.innerHTML = `
+    <div class="card">
+      <div class="small" style="margin-bottom:8px;">データの管理</div>
+      <div class="row">
+        <button class="secondary" id="btnExport">全研究をJSONで書き出す</button>
+        <button class="secondary" id="btnImportJson">JSONから読み込む</button>
+        <input type="file" id="fileInput" accept="application/json" style="display:none;">
+      </div>
+    </div>
+  `;
+  document.getElementById("btnExport").onclick = () => {
+    const data = { researches: loadResearches() };
+    const blob = new Blob([JSON.stringify(data, null, 1)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "kenkyu_backup.json"; a.click();
+    URL.revokeObjectURL(url);
+  };
+  document.getElementById("btnImportJson").onclick = () => document.getElementById("fileInput").click();
+  document.getElementById("fileInput").onchange = (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (data.researches) { saveResearches(data.researches); alert("読み込んだ。"); }
+      } catch(err) { alert("読み込みに失敗した: " + err.message); }
+    };
+    reader.readAsText(file);
+  };
+}
+
+function switchTab(name) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab===name));
+  document.querySelectorAll(".panel").forEach(p => p.classList.toggle("active", p.id==="panel-"+name));
+  if (name==="editor") renderEditorTab();
+  if (name==="list") renderListTab();
+  if (name==="settings") renderSettingsTab();
+}
+document.querySelectorAll(".tab").forEach(t => { t.onclick = () => switchTab(t.dataset.tab); });
+
+renderEditorTab();
+</script>
+</body>
+</html>
