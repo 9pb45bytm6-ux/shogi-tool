@@ -559,6 +559,7 @@ function renderTreeTab() {
     <span class="small">${current.starred?'ブックマーク済み':'ブックマークする'}</span>
   </div>`;
   html += `<textarea id="noteBox" placeholder="この局面の研究メモ(フォーカスを外すと自動保存)" style="margin-top:8px; width:260px; min-height:70px;">${current.note||""}</textarea>`;
+  html += `<div style="margin-top:8px;"><button class="secondary" id="btnToKenkyu">この局面を研究サイトで開く</button></div>`;
   html += `</div>`;
   html += `<div style="min-width:220px; flex:1;">`;
   html += `<div class="small" style="font-weight:700; margin-bottom:6px;">この局面から指された手 (${edges.length}種)</div>`;
@@ -596,6 +597,16 @@ function renderTreeTab() {
   document.getElementById("noteBox").onblur = (e) => {
     NOTES[noteKey] = Object.assign({}, NOTES[noteKey]||{starred:false}, { note: e.target.value, updatedAt: new Date().toISOString() });
     saveNotes(NOTES);
+  };
+  document.getElementById("btnToKenkyu").onclick = () => {
+    const pathLabel = treePath.map(p=>p.move).join(" ");
+    const sourceNote = `サイト1(${treeSide==='S'?'先手番':'後手番'}ツリー${pathLabel?": "+pathLabel:""})より`;
+    try {
+      localStorage.setItem("shogi_handoff", JSON.stringify({ board: node.snap.board, hands: node.snap.hands, turn: node.snap.turn, sourceNote }));
+      location.href = "kenkyu.html";
+    } catch (e) {
+      alert("研究サイトへの連携に失敗した。");
+    }
   };
 }
 
