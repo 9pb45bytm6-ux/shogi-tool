@@ -356,9 +356,18 @@ let treeSide = "S";
 let treePath = []; // [{move, hash}]
 
 /* ---------- ツリー構築 ---------- */
+function parseStartTimeToDate(startTime) {
+  if (!startTime) return null;
+  const m = /^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})/.exec(startTime);
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2])-1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
+}
+
 function buildTrees() {
   const trees = { S: { root: null, nodes: {} }, G: { root: null, nodes: {} } };
   let rootHash = null;
+  const now = new Date();
+  const oneMonthAgo = new Date(now.getTime() - 30*24*60*60*1000);
   for (const g of GAMES) {
     if (!g.tktSide) continue;
     const trace = simulateGame(g.moveTokens);
@@ -368,13 +377,16 @@ function buildTrees() {
     if (!tree.root) tree.root = trace[0].before;
     const win = g.result === "win" ? 1 : 0;
     const lose = g.result === "lose" ? 1 : 0;
+    const gDate = parseStartTimeToDate(g.startTime);
+    const isRecent = gDate && gDate >= oneMonthAgo;
     for (let i=0;i<trace.length;i++) {
       const step = trace[i];
       if (!tree.nodes[step.before]) tree.nodes[step.before] = { edges: {}, snap: step.snap };
       const node = tree.nodes[step.before];
-      if (!node.edges[step.move]) node.edges[step.move] = { n:0, w:0, side: step.side, to: null };
+      if (!node.edges[step.move]) node.edges[step.move] = { n:0, w:0, recentN:0, side: step.side, to: null };
       const e = node.edges[step.move];
       e.n += 1; e.w += win;
+      if (isRecent) e.recentN += 1;
       if (i+1 < trace.length) e.to = trace[i+1].before;
     }
   }
@@ -389,6 +401,27 @@ function buildTrees() {
     }
   }
   return trees;
+}
+
+function computeStudyRecommendations() {
+  const trees = buildTrees();
+  const result = {};
+  ["S","G"].forEach(sk => {
+    const tree = trees[sk];
+    const allEdges = [];
+    for (const hash in tree.nodes) {
+      const node = tree.nodes[hash];
+      for (const move in node.edges) {
+        const e = node.edges[move];
+        allEdges.push({ hash, move, n:e.n, w:e.w, recentN:e.recentN, rate: e.n>0?(e.w/e.n):0 });
+      }
+    }
+    const byRecent = allEdges.filter(e=>e.recentN>0).sort((a,b)=>b.recentN-a.recentN).slice(0,3);
+    const byBest = allEdges.filter(e=>e.n>=5).sort((a,b)=>b.rate-a.rate).slice(0,3);
+    const byWorst = allEdges.filter(e=>e.n>=5).sort((a,b)=>a.rate-b.rate).slice(0,3);
+    result[sk] = { recent: byRecent, best: byBest, worst: byWorst };
+  });
+  return result;
 }
 
 function bfsPath(tree, targetHash) {
@@ -741,7 +774,36 @@ function renderDashboardTab() {
     </div>`;
   };
 
-  let html = `<div class="card" style="display:inline-block;">
+  const study = computeStudyRecommendations();
+  const studySection = (title, hint) => {
+    let h = `<div style="flex:1; min-width:260px;">
+      <div style="font-weight:700; margin-bottom:2px;">${title}</div>
+      <div class="small" style="margin-bottom:8px;">${hint}</div>`;
+    ["S","G"].forEach(sk => {
+      const list = title.includes("直近") ? study[sk].recent : title.includes("勝率が高") ? study[sk].best : study[sk].worst;
+      h += `<div class="small" style="font-weight:700; margin:6px 0 4px;">${sk==='S'?'先手':'後手'}</div>`;
+      if (list.length===0) { h += `<div class="small" style="color:var(--sub);">該当なし</div>`; }
+      list.forEach(item => {
+        const rate = Math.round(item.rate*100);
+        h += `<div class="edge-item" data-studysk="${sk}" data-studyhash="${item.hash}">
+          <span class="edge-move">${item.move}</span>
+          <span class="small">${title.includes("直近") ? `直近${item.recentN}回` : `${rate}% (${item.n}局)`}</span>
+        </div>`;
+      });
+    });
+    h += `</div>`;
+    return h;
+  };
+  let html = `<div class="card">
+    <div style="font-weight:800; font-family:'Shippori Mincho',serif; font-size:16px; margin-bottom:2px;">勉強推奨局面</div>
+    <div class="small" style="margin-bottom:10px;">タップするとその局面のツリーに移動する</div>
+    <div class="flex-gap">
+      ${studySection("直近1ヶ月で多い局面", "この1ヶ月で繰り返し出現(先後別TOP3)")}
+      ${studySection("勝率が高い局面", "5局以上出現・得意な局面(先後別TOP3)")}
+      ${studySection("勝率が低い局面", "5局以上出現・苦手な局面、要復習(先後別TOP3)")}
+    </div>
+  </div>`;
+  html += `<div class="card" style="display:inline-block;">
     <div class="small">総合成績</div>
     <div style="font-size:22px; font-weight:800;">${totalW}勝${totalN-totalW}敗</div>
     <div class="small">勝率 ${Math.round((totalW/totalN)*100)}%</div>
@@ -776,6 +838,9 @@ function renderDashboardTab() {
   });
   html += `</tbody></table></div></div>`;
   el.innerHTML = html;
+  el.querySelectorAll("[data-studyhash]").forEach(item => {
+    item.onclick = () => jumpTo(item.dataset.studysk, item.dataset.studyhash);
+  });
   el.querySelectorAll("[data-delid]").forEach(btn => {
     btn.onclick = () => {
       if (!confirm("この対局データを削除する?")) return;
