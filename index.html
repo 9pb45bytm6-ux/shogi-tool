@@ -635,7 +635,7 @@ function renderTreeTab() {
     const pathLabel = treePath.map(p=>p.move).join(" ");
     const sourceNote = `サイト1(${treeSide==='S'?'先手番':'後手番'}ツリー${pathLabel?": "+pathLabel:""})より`;
     try {
-      localStorage.setItem("shogi_handoff", JSON.stringify({ board: node.snap.board, hands: node.snap.hands, turn: node.snap.turn, sourceNote }));
+      localStorage.setItem("shogi_handoff", JSON.stringify({ board: node.snap.board, hands: node.snap.hands, turn: node.snap.turn, sourceNote, ply: treePath.length }));
       location.href = "kenkyu.html";
     } catch (e) {
       alert("研究サイトへの連携に失敗した。");
