@@ -282,15 +282,17 @@ function newEmptyResearch(sourceNote) {
     title: "",
     createdAt: new Date().toISOString(),
     sourceNote: sourceNote || "新規(初期局面)",
+    rootPly: 0,
     root: rootHash,
     nodes: { [rootHash]: { board, hands, turn:"S", edges:{}, note:"" } },
   };
 }
 
-function newResearchFromPosition(board, hands, turn, sourceNote) {
+function newResearchFromPosition(board, hands, turn, sourceNote, ply) {
   const rootHash = encodeStateCompact(board, hands, turn);
   return {
     id: null, title: "", createdAt: new Date().toISOString(), sourceNote: sourceNote || "局面から開始",
+    rootPly: ply || 0,
     root: rootHash, nodes: { [rootHash]: { board, hands, turn, edges:{}, note:"" } },
   };
 }
@@ -409,10 +411,129 @@ function findMatchingResearches(rootHash) {
   return loadResearches().filter(r => r.root === rootHash);
 }
 
+/* ---------- 研究どうしの統合 ---------- */
+// 自動で統合を確認するのは「共通する局面のうち、初期局面から数えて MERGE_MIN_PLY 手目以上のものがある」時だけ
+const MERGE_MIN_PLY = 10;
+
+function reachableCount(nodes, root) {
+  const seen = new Set([root]); const queue = [root];
+  while (queue.length) {
+    const h = queue.shift(); const n = nodes[h]; if (!n) continue;
+    Object.values(n.edges).forEach(e => { if (nodes[e.to] && !seen.has(e.to)) { seen.add(e.to); queue.push(e.to); } });
+  }
+  return seen.size;
+}
+
+/* 各局面が初期局面から何手目か(ルートからの最短手数 + 開始局面の手数) */
+function nodeDepths(research) {
+  const depth = { [research.root]: research.rootPly || 0 };
+  const queue = [research.root];
+  while (queue.length) {
+    const h = queue.shift(); const n = research.nodes[h]; if (!n) continue;
+    Object.values(n.edges).forEach(e => {
+      if (research.nodes[e.to] && depth[e.to] === undefined) { depth[e.to] = depth[h] + 1; queue.push(e.to); }
+    });
+  }
+  return depth;
+}
+
+/* 2つの研究の重なり具合。共通局面の数と、最も深い共通局面(両方の研究での手数の小さい方で比較) */
+function analyzeOverlap(a, b) {
+  const da = nodeDepths(a), db = nodeDepths(b);
+  let shared = 0, deepest = -1, deepHash = null;
+  for (const h in a.nodes) {
+    if (!b.nodes[h]) continue;
+    shared++;
+    if (da[h] === undefined || db[h] === undefined) continue;
+    const d = Math.min(da[h], db[h]);
+    if (d > deepest) { deepest = d; deepHash = h; }
+  }
+  return { shared, deepest, deepHash };
+}
+
+/* target に source を足した統合結果を返す。ルートから全局面に辿れない場合は null */
+function mergeResearches(target, source) {
+  const nodes = {};
+  const cloneNode = (n) => ({ board: n.board, hands: n.hands, turn: n.turn, edges: Object.assign({}, n.edges), note: n.note || "" });
+  for (const h in target.nodes) nodes[h] = cloneNode(target.nodes[h]);
+  for (const h in source.nodes) {
+    const sn = source.nodes[h];
+    if (!nodes[h]) { nodes[h] = cloneNode(sn); continue; }
+    const tn = nodes[h];
+    for (const ek in sn.edges) if (!tn.edges[ek]) tn.edges[ek] = sn.edges[ek];
+    if (sn.note && tn.note && sn.note !== tn.note) tn.note = tn.note + "\n---\n" + sn.note;
+    else if (sn.note && !tn.note) tn.note = sn.note;
+  }
+  const total = Object.keys(nodes).length;
+  let root = null, rootPly = 0;
+  for (const cand of [{ r: target.root, p: target.rootPly }, { r: source.root, p: source.rootPly }]) {
+    if (nodes[cand.r] && reachableCount(nodes, cand.r) === total) { root = cand.r; rootPly = cand.p || 0; break; }
+  }
+  if (!root) return null;
+  let sourceNote = target.sourceNote;
+  if (source.sourceNote && source.sourceNote !== target.sourceNote) sourceNote = target.sourceNote + " / " + source.sourceNote;
+  const declined = Array.from(new Set([...(target.mergeDeclined || []), ...(source.mergeDeclined || [])]))
+    .filter(id => id !== target.id && id !== source.id);
+  return {
+    id: target.id, title: target.title || source.title, createdAt: target.createdAt,
+    sourceNote, rootPly, root, nodes, mergeDeclined: declined,
+  };
+}
+
+/* cur と重なっている保存済み研究(10手目以降に共通局面あり)を、深い順に返す */
+function findMergeCandidates(cur, list) {
+  const out = [];
+  list.forEach(r => {
+    if (cur.id && r.id === cur.id) return;
+    if ((cur.mergeDeclined || []).includes(r.id)) return;
+    if (cur.id && (r.mergeDeclined || []).includes(cur.id)) return;
+    const ov = analyzeOverlap(cur, r);
+    if (ov.deepest < MERGE_MIN_PLY) return;
+    const merged = mergeResearches(r, cur);
+    if (!merged) return;
+    out.push({ research: r, shared: ov.shared, deepest: ov.deepest, deepHash: ov.deepHash, merged });
+  });
+  out.sort((a, b) => (b.deepest - a.deepest) || (b.shared - a.shared));
+  return out;
+}
+
+/* research のルートから targetHash までの経路を PATH 形式で返す */
+function findPathTo(research, targetHash) {
+  if (targetHash === research.root) return [];
+  const prev = { [research.root]: null }; const queue = [research.root];
+  while (queue.length) {
+    const h = queue.shift(); const n = research.nodes[h]; if (!n) continue;
+    for (const e of Object.values(n.edges)) {
+      if (prev[e.to] !== undefined || !research.nodes[e.to]) continue;
+      prev[e.to] = { from: h, mv: e.mv }; queue.push(e.to);
+      if (e.to === targetHash) {
+        const path = []; let cur = targetHash;
+        while (prev[cur]) { path.unshift({ mv: prev[cur].mv, hash: cur }); cur = prev[cur].from; }
+        return path;
+      }
+    }
+  }
+  return null;
+}
+
+/* 確認ダイアログ用: 共通局面までの手順(直近8手まで、▲先手 △後手つき) */
+function sharedLineText(research, hash) {
+  const path = findPathTo(research, hash);
+  if (!path) return "";
+  if (path.length === 0) return "(この研究の開始局面そのもの)";
+  const marks = path.map((p, i) => {
+    const fromHash = i === 0 ? research.root : path[i-1].hash;
+    const turn = research.nodes[fromHash].turn;
+    return (turn === "S" ? "▲" : "△") + moveToNotation(p.mv);
+  });
+  return (marks.length > 8 ? "… " : "") + marks.slice(-8).join(" ");
+}
+
 function renderEditorTab() {
   const el = document.getElementById("panel-editor");
   if (!CURRENT) {
     let handoffData = null;
+    let matchIds = [];
     try {
       const raw = localStorage.getItem(LS_HANDOFF);
       if (raw) handoffData = JSON.parse(raw);
@@ -422,6 +543,7 @@ function renderEditorTab() {
     if (handoffData) {
       const incomingHash = encodeStateCompact(handoffData.board, handoffData.hands, handoffData.turn);
       const matches = findMatchingResearches(incomingHash);
+      matchIds = matches.map(m => m.id);
       if (matches.length > 0) {
         html += `<div class="tip">サイト1から渡された局面は、既存の研究(${matches.length}件)と同じ開始局面。続きを書き足すか、別の新規研究として作るか選べる。</div>`;
         matches.forEach(m => {
@@ -447,7 +569,8 @@ function renderEditorTab() {
     };
     const bhNew = document.getElementById("btnFromHandoffNew");
     if (bhNew) bhNew.onclick = () => {
-      CURRENT = newResearchFromPosition(handoffData.board, handoffData.hands, handoffData.turn, handoffData.sourceNote || "サイト1より");
+      CURRENT = newResearchFromPosition(handoffData.board, handoffData.hands, handoffData.turn, handoffData.sourceNote || "サイト1より", handoffData.ply);
+      CURRENT.mergeDeclined = matchIds.slice(); // 「別の研究として始める」を選んだ相手には、保存時に統合を聞き直さない
       localStorage.removeItem(LS_HANDOFF);
       PATH = []; SELECTED = null; renderEditorTab();
     };
@@ -533,13 +656,33 @@ function renderEditorTab() {
   };
   document.getElementById("btnSaveResearch").onclick = () => {
     const list = loadResearches();
-    if (CURRENT.id) {
-      const idx = list.findIndex(r => r.id === CURRENT.id);
-      if (idx >= 0) list[idx] = CURRENT; else { CURRENT.id = Date.now(); list.push(CURRENT); }
-    } else {
-      CURRENT.id = Date.now();
-      list.push(CURRENT);
+    const cands = findMergeCandidates(CURRENT, list);
+    for (const c of cands) {
+      const name = c.research.title || "(無題)";
+      const line = sharedLineText(c.research, c.deepHash);
+      const msg = `「${name}」と重なっている(共通${c.shared}局面・最も深い共通局面は${c.deepest}手目)。\n共通の手順: ${line}\n\nこの研究に統合する?\n(OK=統合する / キャンセル=統合しない)`;
+      if (confirm(msg)) {
+        const here = currentHash();
+        const merged = c.merged;
+        const newList = list.filter(r => r.id !== CURRENT.id).map(r => r.id === merged.id ? merged : r);
+        saveResearches(newList);
+        CURRENT = merged;
+        PATH = findPathTo(merged, here) || [];
+        SELECTED = null;
+        alert("統合して保存した。");
+        renderEditorTab();
+        return;
+      }
+      CURRENT.mergeDeclined = (CURRENT.mergeDeclined || []).concat(c.research.id);
     }
+    if (!CURRENT.id) CURRENT.id = Date.now();
+    const idx = list.findIndex(r => r.id === CURRENT.id);
+    if (idx >= 0) list[idx] = CURRENT; else list.push(CURRENT);
+    // 「統合しない」と決めた相手側にも記録して、相手を編集して保存した時に聞き直さないようにする
+    (CURRENT.mergeDeclined || []).forEach(did => {
+      const other = list.find(r => r.id === did);
+      if (other && !(other.mergeDeclined || []).includes(CURRENT.id)) other.mergeDeclined = (other.mergeDeclined || []).concat(CURRENT.id);
+    });
     saveResearches(list);
     alert("保存した。");
   };
@@ -550,9 +693,14 @@ function renderListTab() {
   const el = document.getElementById("panel-list");
   const list = loadResearches();
   if (list.length === 0) { el.innerHTML = `<div class="small">まだ保存された研究がない。</div>`; return; }
-  let html = `<table class="data"><thead><tr><th>タイトル</th><th>開始</th><th>作成日</th><th></th></tr></thead><tbody>`;
+  let html = `<div class="row" style="margin-bottom:8px;">
+    <button class="secondary" id="btnMergeSelected" disabled>選択した2件を統合</button>
+    <span class="small">統合したい研究を2件チェックする</span>
+  </div>`;
+  html += `<table class="data"><thead><tr><th></th><th>タイトル</th><th>開始</th><th>作成日</th><th></th></tr></thead><tbody>`;
   list.slice().reverse().forEach(r => {
     html += `<tr>
+      <td><input type="checkbox" data-selid="${r.id}"></td>
       <td>${r.title || "(無題)"}</td>
       <td>${r.sourceNote}</td>
       <td>${(r.createdAt||"").slice(0,10)}</td>
@@ -564,6 +712,34 @@ function renderListTab() {
   });
   html += `</tbody></table>`;
   el.innerHTML = html;
+  const checkedIds = () => Array.from(el.querySelectorAll("[data-selid]")).filter(cb => cb.checked).map(cb => cb.dataset.selid);
+  const updateMergeBtn = () => { document.getElementById("btnMergeSelected").disabled = (checkedIds().length !== 2); };
+  el.querySelectorAll("[data-selid]").forEach(cb => { cb.onchange = updateMergeBtn; });
+  document.getElementById("btnMergeSelected").onclick = () => {
+    const ids = checkedIds();
+    if (ids.length !== 2) return;
+    const fresh = loadResearches();
+    const picked = ids.map(id => fresh.find(r => String(r.id) === id)).filter(Boolean);
+    if (picked.length !== 2) return;
+    if (CURRENT && picked.some(r => r.id === CURRENT.id)) {
+      alert("編集画面で開いている研究は統合できない。先に編集画面で保存して閉じてから統合してほしい。");
+      return;
+    }
+    picked.sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+    const target = picked[0], source = picked[1]; // 古い方に新しい方を足す
+    const merged = mergeResearches(target, source);
+    if (!merged) {
+      alert("この2つは統合できない。片方の開始局面から、もう片方の全ての局面へ手順で辿れる関係である必要がある。");
+      return;
+    }
+    const ov = analyzeOverlap(target, source);
+    const line = ov.deepHash ? "\n共通の手順: " + sharedLineText(target, ov.deepHash) : "";
+    const msg = `「${target.title || "(無題)"}」に「${source.title || "(無題)"}」を統合する?\n共通局面: ${ov.shared}個${line}\n\n統合後は1つの研究にまとまり、元に戻せない。`;
+    if (!confirm(msg)) return;
+    const newList = fresh.filter(r => r.id !== source.id).map(r => r.id === merged.id ? merged : r);
+    saveResearches(newList);
+    renderListTab();
+  };
   el.querySelectorAll("[data-openid]").forEach(btn => {
     btn.onclick = () => {
       const list2 = loadResearches();
