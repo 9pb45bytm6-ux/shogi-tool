@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
   :root {
     --bg: #fbf6ea;
@@ -106,13 +107,25 @@
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="wrap" id="authGate">
+  <h1>将棋 局面分析ツール</h1>
+  <div class="card" id="authGateCard">
+    <div class="small">読み込み中...</div>
+  </div>
+</div>
+
+<div class="wrap" id="appContainer" style="display:none;">
   <h1>将棋 局面分析ツール</h1>
   <div class="subtitle" id="summaryLine">読み込み中...</div>
+  <div class="row" style="justify-content:flex-end; margin-bottom:6px;">
+    <span class="small" id="userEmailLabel"></span>
+    <button class="secondary" id="btnSignOut" style="padding:3px 10px; font-size:11px;">ログアウト</button>
+  </div>
 
   <div class="tabs">
     <div class="tab active" data-tab="import">棋譜を追加</div>
     <div class="tab" data-tab="tree">局面ツリー</div>
+    <div class="tab" data-tab="ranking">頻出局面</div>
     <div class="tab" data-tab="search">局面検索</div>
     <div class="tab" data-tab="bookmarks">ブックマーク</div>
     <div class="tab" data-tab="dash">成績ダッシュボード</div>
@@ -121,6 +134,7 @@
 
   <div class="panel active" id="panel-import"></div>
   <div class="panel" id="panel-tree"></div>
+  <div class="panel" id="panel-ranking"></div>
   <div class="panel" id="panel-search"></div>
   <div class="panel" id="panel-bookmarks"></div>
   <div class="panel" id="panel-dash"></div>
@@ -128,6 +142,163 @@
 </div>
 
 <script>
+/* =========================================================
+   共通データ層モジュール (サイト1・サイト2の両方で読み込む)
+   Supabaseとのやり取りを全部ここに集約し、呼び出し側(アプリ本体)は
+   「ローカル変数の配列を読み書きする」のと同じ感覚で使えるようにする。
+   ========================================================= */
+
+const SUPABASE_URL = "https://dhramovxeygxjyerbnmi.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRocmFtb3Z4ZXlneGp5ZXJibm1pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA3MzQzNjIsImV4cCI6MjEwNjMxMDM2Mn0.tq5ZOzbz9URdUo2l7_BfYhyIvGO_VmbXAqH6Bm2XscU"; // ビルド時に実際の値へ置換
+
+let _sb = null;
+function getClient() {
+  if (_sb) return _sb;
+  _sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  return _sb;
+}
+/* テスト専用: 擬似クライアントに差し替えられるようキャッシュを破棄する。
+   本番コードからは呼ばない。 */
+function _resetClientForTest() { _sb = null; }
+
+/* ---------- 認証 ---------- */
+async function signInWithGoogle() {
+  const sb = getClient();
+  return sb.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: location.href.split("#")[0].split("?")[0] },
+  });
+}
+async function signOut() {
+  const sb = getClient();
+  return sb.auth.signOut();
+}
+async function getSession() {
+  const sb = getClient();
+  const { data } = await sb.auth.getSession();
+  return data.session;
+}
+function onAuthChange(callback) {
+  const sb = getClient();
+  return sb.auth.onAuthStateChange((_event, session) => callback(session));
+}
+
+/* ---------- プロフィール(プラン・管理者フラグ) ---------- */
+async function getProfile() {
+  const sb = getClient();
+  const { data, error } = await sb.from("profiles").select("plan, ad_free, is_admin").single();
+  if (error) throw error;
+  return data;
+}
+
+/* ---------- エラー分類 ----------
+   SQL側で RAISE EXCEPTION 'GAME_LIMIT_REACHED' のように投げたメッセージを、
+   supabase-jsはerror.message にそのまま載せて返す。 */
+function classifyDbError(error) {
+  if (!error) return null;
+  const msg = (error.message || "") + " " + (error.details || "");
+  if (msg.includes("GAME_LIMIT_REACHED")) return "GAME_LIMIT_REACHED";
+  if (msg.includes("RESEARCH_LIMIT_REACHED")) return "RESEARCH_LIMIT_REACHED";
+  if (error.code === "23505") return "DUPLICATE"; // unique制約違反(同じstart_time)
+  return "UNKNOWN";
+}
+
+/* ---------- games ----------
+   DBの列名(snake_case)と、アプリ内部で使ってるキー(camelCase)の変換をここで吸収する */
+function gameRowToApp(row) {
+  return {
+    id: row.id,
+    startTime: row.start_time,
+    sente: row.sente,
+    gote: row.gote,
+    jikan: row.jikan,
+    moveTokens: row.move_tokens,
+    movesCount: row.moves_count,
+    tktSide: row.tkt_side,
+    result: row.result,
+    kaikei: row.kaikei,
+  };
+}
+function gameAppToRow(g) {
+  return {
+    start_time: g.startTime,
+    sente: g.sente,
+    gote: g.gote,
+    jikan: g.jikan,
+    move_tokens: g.moveTokens,
+    moves_count: g.movesCount,
+    tkt_side: g.tktSide,
+    result: g.result,
+    kaikei: g.kaikei,
+  };
+}
+
+async function listGames() {
+  const sb = getClient();
+  const { data, error } = await sb.from("games").select("*").order("start_time", { ascending: true });
+  if (error) throw error;
+  return data.map(gameRowToApp);
+}
+
+/* 1局登録。成功時は {ok:true, row} / 失敗時は {ok:false, kind, error} を返す(例外は投げない) */
+async function insertGame(gameApp) {
+  const sb = getClient();
+  const { data, error } = await sb.from("games").insert(gameAppToRow(gameApp)).select().single();
+  if (error) return { ok: false, kind: classifyDbError(error), error };
+  return { ok: true, row: gameRowToApp(data) };
+}
+
+async function deleteGame(id) {
+  const sb = getClient();
+  const { error } = await sb.from("games").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/* ---------- notes ---------- */
+async function listNotes() {
+  const sb = getClient();
+  const { data, error } = await sb.from("notes").select("*");
+  if (error) throw error;
+  const out = {};
+  data.forEach(r => { out[r.note_key] = { starred: r.starred, note: r.note, updatedAt: r.updated_at }; });
+  return out;
+}
+async function upsertNote(noteKey, { starred, note }) {
+  const sb = getClient();
+  const { error } = await sb.from("notes").upsert({
+    note_key: noteKey, starred: !!starred, note: note || "", updated_at: new Date().toISOString(),
+  }, { onConflict: "user_id,note_key" });
+  if (error) throw error;
+}
+
+/* ---------- researches(サイト2) ---------- */
+async function listResearches() {
+  const sb = getClient();
+  const { data, error } = await sb.from("researches").select("*").order("updated_at", { ascending: false });
+  if (error) throw error;
+  return data.map(r => Object.assign({ id: r.research_id }, r.data, { title: r.title }));
+}
+async function upsertResearch(research) {
+  const sb = getClient();
+  if (!research.id) research.id = Date.now();
+  const { error } = await sb.from("researches").upsert({
+    research_id: research.id,
+    title: research.title || "",
+    data: research,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "user_id,research_id" });
+  if (error) return { ok: false, kind: classifyDbError(error), error };
+  return { ok: true };
+}
+async function deleteResearch(researchId) {
+  const sb = getClient();
+  const { error } = await sb.from("researches").delete().eq("research_id", researchId);
+  if (error) throw error;
+}
+
+
+/* ========= ここまで共通データ層モジュール ========= */
+
 /* =========================================================
    将棋 局面分析ツール - 単体HTML版
    データはすべてブラウザのlocalStorageに保存される(サーバー送信なし)
@@ -149,17 +320,12 @@ const KAIKEI_HINTS = ["対矢倉","対雁木","相掛かり","横歩取り","角
 
 const MOVE_RE = /^([１２３４５６７８９])([一二三四五六七八九])(成香|成桂|成銀|歩|香|桂|銀|金|角|飛|玉|王|と|馬|龍|竜)(成)?(打)?(?:\((\d)(\d)\))?$/;
 
-/* ---------- localStorage helpers ---------- */
-const LS_GAMES = "shogi_tool_games";
+/* ---------- localStorage helpers ----------
+   棋譜(games)とメモ(notes)はDB管理に移行したため、ここでは
+   端末ごとの設定であるMYNAMES(自分の将棋ウォーズID)だけ引き続きローカル保存する。 */
 const LS_MYNAMES = "shogi_tool_mynames";
-const LS_NOTES = "shogi_tool_notes";
-
-function loadGames() { try { return JSON.parse(localStorage.getItem(LS_GAMES)) || []; } catch(e) { return []; } }
-function saveGames(games) { localStorage.setItem(LS_GAMES, JSON.stringify(games)); }
 function loadMyNames() { try { return JSON.parse(localStorage.getItem(LS_MYNAMES)) || []; } catch(e) { return []; } }
 function saveMyNames(names) { localStorage.setItem(LS_MYNAMES, JSON.stringify(names)); }
-function loadNotes() { try { return JSON.parse(localStorage.getItem(LS_NOTES)) || {}; } catch(e) { return {}; } }
-function saveNotes(notes) { localStorage.setItem(LS_NOTES, JSON.stringify(notes)); }
 
 /* ---------- 棋譜パーサー ---------- */
 function parseMoveToken(tok) {
@@ -347,9 +513,9 @@ function renderLockScreen() {
 }
 
 
-let GAMES = loadGames();
-let MYNAMES = loadMyNames();
-let NOTES = loadNotes();
+let GAMES = []; // initApp()でDBから読み込んで入る
+let MYNAMES = loadMyNames(); // これは端末ごとの設定として引き続きローカル保存
+let NOTES = {}; // initApp()でDBから読み込んで入る
 let pendingImports = []; // {parsed, tktSide, result, kaikei, dup}
 
 let treeSide = "S";
@@ -383,7 +549,7 @@ function buildTrees() {
       const step = trace[i];
       if (!tree.nodes[step.before]) tree.nodes[step.before] = { edges: {}, snap: step.snap };
       const node = tree.nodes[step.before];
-      if (!node.edges[step.move]) node.edges[step.move] = { n:0, w:0, recentN:0, side: step.side, to: null };
+      if (!node.edges[step.move]) node.edges[step.move] = { n:0, w:0, recentN:0, side: step.side, to: null, ply: i+1 };
       const e = node.edges[step.move];
       e.n += 1; e.w += win;
       if (isRecent) e.recentN += 1;
@@ -403,25 +569,67 @@ function buildTrees() {
   return trees;
 }
 
-function computeStudyRecommendations() {
-  const trees = buildTrees();
-  const result = {};
-  ["S","G"].forEach(sk => {
-    const tree = trees[sk];
-    const allEdges = [];
-    for (const hash in tree.nodes) {
-      const node = tree.nodes[hash];
-      for (const move in node.edges) {
-        const e = node.edges[move];
-        allEdges.push({ hash, move, n:e.n, w:e.w, recentN:e.recentN, rate: e.n>0?(e.w/e.n):0 });
-      }
+/* ---------- 頻出局面ランキング ----------
+   「一番後ろ」の局面だけを拾う: 同じ条件(minCount局以上)を満たす手が、その先にもう無い局面。
+   hash は手を指した「後」の局面(=ここから先で分かれていく局面)。 */
+function computeRanking(trees, sk, opt) {
+  const tree = trees[sk];
+  const key = opt.sort === "recent" ? "recentN" : "n";
+  const all = [];
+  for (const hash in tree.nodes) {
+    const node = tree.nodes[hash];
+    for (const move in node.edges) {
+      const e = node.edges[move];
+      all.push({ hash, move, n:e.n, w:e.w, recentN:e.recentN, rate: e.n>0?(e.w/e.n):0, ply:e.ply, to:e.to });
     }
-    const byRecent = allEdges.filter(e=>e.recentN>0).sort((a,b)=>b.recentN-a.recentN).slice(0,3);
-    const byBest = allEdges.filter(e=>e.n>=5).sort((a,b)=>b.rate-a.rate).slice(0,3);
-    const byWorst = allEdges.filter(e=>e.n>=5).sort((a,b)=>a.rate-b.rate).slice(0,3);
-    result[sk] = { recent: byRecent, best: byBest, worst: byWorst };
-  });
-  return result;
+  }
+  const list = all.filter(e => {
+    if (e[key] < opt.minCount) return false;
+    if (e.ply < opt.minPly) return false;
+    if (!e.to) return true;
+    const next = tree.nodes[e.to];
+    if (!next) return true;
+    return !Object.values(next.edges).some(x => x[key] >= opt.minCount);
+  }).map(e => Object.assign({}, e, { hash: e.to || e.hash }));
+  const cmp = {
+    deep:   (a,b)=> b.ply-a.ply || b.n-a.n,
+    count:  (a,b)=> b.n-a.n || b.ply-a.ply,
+    recent: (a,b)=> b.recentN-a.recentN || b.ply-a.ply,
+    best:   (a,b)=> b.rate-a.rate || b.n-a.n || b.ply-a.ply,
+    worst:  (a,b)=> a.rate-b.rate || b.n-a.n || b.ply-a.ply
+  }[opt.sort] || ((a,b)=>b.ply-a.ply);
+  return list.sort(cmp);
+}
+
+/* ---------- 分岐点ジャンプ ----------
+   最多の手が threshold% 以上かつ2局以上通った間は進み続け、分かれる局面で止まる */
+const LS_JUMP_TH = "shogi_jump_threshold", LS_JUMP_AUTO = "shogi_jump_auto";
+function getJumpThreshold() {
+  try { const v = parseInt(localStorage.getItem(LS_JUMP_TH),10); if (v>=50 && v<=100) return v; } catch(e) {}
+  return 80;
+}
+function getJumpAuto() {
+  try { return localStorage.getItem(LS_JUMP_AUTO) !== "0"; } catch(e) { return true; }
+}
+function advanceToBranch(tree, path, threshold) {
+  let cur = path.length ? path[path.length-1].hash : tree.root;
+  const seen = new Set([cur]);
+  let out = path.slice();
+  for (let i=0;i<300;i++) {
+    const node = tree.nodes[cur];
+    if (!node) break;
+    const ents = Object.entries(node.edges);
+    if (!ents.length) break;
+    const total = ents.reduce((t,[,e])=>t+e.n,0);
+    ents.sort((a,b)=>b[1].n-a[1].n);
+    const [mv, e] = ents[0];
+    if (total < 2 || !e.to || seen.has(e.to)) break;
+    if (e.n/total*100 < threshold) break;
+    seen.add(e.to);
+    out = out.concat([{ move: mv, hash: e.to }]);
+    cur = e.to;
+  }
+  return out;
 }
 
 function bfsPath(tree, targetHash) {
@@ -541,23 +749,28 @@ function renderImportPreview() {
   box.querySelectorAll(".kaikeiInput").forEach(inp => {
     inp.oninput = (e) => { pendingImports[e.target.dataset.idx].kaikei = e.target.value; };
   });
-  document.getElementById("btnSaveImports").onclick = () => {
-    let added = 0;
-    pendingImports.forEach(item => {
-      if (item.dup) return;
+  document.getElementById("btnSaveImports").onclick = async () => {
+    const btn = document.getElementById("btnSaveImports");
+    btn.disabled = true; btn.textContent = "保存中...";
+    let added = 0, limitHit = false;
+    for (const item of pendingImports) {
+      if (item.dup) continue;
+      if (limitHit) break;
       const p = item.parsed;
-      GAMES.push({
-        id: Date.now() + Math.random(),
+      const res = await insertGame({
         startTime: p.startTime, sente: p.sente, gote: p.gote, jikan: p.jikan,
         moveTokens: p.moveTokens, tktSide: item.tktSide, result: item.result,
         kaikei: item.kaikei || "(未分類)", movesCount: p.moveTokens.length,
       });
-      added++;
-    });
-    saveGames(GAMES);
+      if (res.ok) { GAMES.push(res.row); added++; }
+      else if (res.kind === "GAME_LIMIT_REACHED") { limitHit = true; }
+      else if (res.kind !== "DUPLICATE") { alert("保存に失敗した局がある: " + (res.error && res.error.message)); }
+    }
     pendingImports = [];
     document.getElementById("importText").value = "";
-    document.getElementById("importPreview").innerHTML = `<div class="card">${added}局を保存した。</div>`;
+    let msg = `${added}局を保存した。`;
+    if (limitHit) msg += ` 無料プランの上限(30局)に達したため、これ以上は保存できなかった。有料プランで解放できる。`;
+    document.getElementById("importPreview").innerHTML = `<div class="card">${msg}</div>`;
     updateSummaryLine();
   };
 }
@@ -581,6 +794,7 @@ function renderTreeTab() {
   let html = `<div class="row" style="margin-bottom:12px;">
     <button class="${treeSide==='S'?'':'secondary'}" id="btnSideS">先手番ツリー</button>
     <button class="${treeSide==='G'?'':'secondary'}" id="btnSideG">後手番ツリー</button>
+    <button class="secondary" id="btnBranch">分岐点へ進む</button>
   </div>`;
   html += `<div class="crumb"><a id="crumbRoot">開始局面</a>`;
   treePath.forEach((p,i) => { html += ` &gt; <a class="crumbLink" data-idx="${i+1}">${p.move}</a>`; });
@@ -609,6 +823,11 @@ function renderTreeTab() {
 
   document.getElementById("btnSideS").onclick = () => { treeSide="S"; treePath=[]; renderTreeTab(); };
   document.getElementById("btnSideG").onclick = () => { treeSide="G"; treePath=[]; renderTreeTab(); };
+  document.getElementById("btnBranch").onclick = () => {
+    const np = advanceToBranch(tree, treePath, getJumpThreshold());
+    if (np.length === treePath.length) { alert("ここが分岐点(これ以上、一本道ではない)。"); return; }
+    treePath = np; renderTreeTab();
+  };
   document.getElementById("crumbRoot").onclick = () => { treePath=[]; renderTreeTab(); };
   el.querySelectorAll(".crumbLink").forEach(a => {
     a.onclick = () => { treePath = treePath.slice(0, parseInt(a.dataset.idx,10)); renderTreeTab(); };
@@ -622,25 +841,74 @@ function renderTreeTab() {
       renderTreeTab();
     };
   });
-  document.getElementById("btnStar").onclick = () => {
-    NOTES[noteKey] = Object.assign({}, current, { starred: !current.starred, updatedAt: new Date().toISOString() });
-    saveNotes(NOTES);
+  document.getElementById("btnStar").onclick = async () => {
+    const updated = Object.assign({}, current, { starred: !current.starred, updatedAt: new Date().toISOString() });
+    NOTES[noteKey] = updated;
     renderTreeTab();
+    try { await upsertNote(noteKey, updated); }
+    catch (e) { alert("保存に失敗した: " + e.message); }
   };
-  document.getElementById("noteBox").onblur = (e) => {
-    NOTES[noteKey] = Object.assign({}, NOTES[noteKey]||{starred:false}, { note: e.target.value, updatedAt: new Date().toISOString() });
-    saveNotes(NOTES);
+  document.getElementById("noteBox").onblur = async (e) => {
+    const updated = Object.assign({}, NOTES[noteKey]||{starred:false}, { note: e.target.value, updatedAt: new Date().toISOString() });
+    NOTES[noteKey] = updated;
+    try { await upsertNote(noteKey, updated); }
+    catch (err) { alert("メモの保存に失敗した: " + err.message); }
   };
   document.getElementById("btnToKenkyu").onclick = () => {
     const pathLabel = treePath.map(p=>p.move).join(" ");
     const sourceNote = `サイト1(${treeSide==='S'?'先手番':'後手番'}ツリー${pathLabel?": "+pathLabel:""})より`;
     try {
-      localStorage.setItem("shogi_handoff", JSON.stringify({ board: node.snap.board, hands: node.snap.hands, turn: node.snap.turn, sourceNote, ply: treePath.length }));
+      localStorage.setItem("shogi_handoff", JSON.stringify({ board: node.snap.board, hands: node.snap.hands, turn: node.snap.turn, sourceNote, ply: treePath.length, side: treeSide }));
       location.href = "kenkyu.html";
     } catch (e) {
       alert("研究サイトへの連携に失敗した。");
     }
   };
+}
+
+/* ---------- タブ: 頻出局面 ---------- */
+const RANK = { side:"S", sort:"deep", minCount:null, minPly:10, shown:10 };
+const RANK_SORTS = [["deep","深い順"],["count","局数順"],["recent","直近1ヶ月"],["best","勝率高"],["worst","勝率低"]];
+function rankDefaultMin(sort) { return (sort==="best"||sort==="worst") ? 5 : 2; }
+function renderRankingTab() {
+  const el = document.getElementById("panel-ranking");
+  const trees = buildTrees();
+  if (!trees[RANK.side].root) {
+    el.innerHTML = `<div class="small">まだ有効な棋譜データがない。「棋譜を追加」タブから登録してほしい。</div>`;
+    return;
+  }
+  const minCount = RANK.minCount != null ? RANK.minCount : rankDefaultMin(RANK.sort);
+  const list = computeRanking(trees, RANK.side, { sort:RANK.sort, minCount, minPly:RANK.minPly });
+  let html = `<div class="row" style="margin-bottom:10px;">
+    <button class="${RANK.side==='S'?'':'secondary'}" id="rkS">先手</button>
+    <button class="${RANK.side==='G'?'':'secondary'}" id="rkG">後手</button>
+  </div><div class="row" style="margin-bottom:10px;">`;
+  RANK_SORTS.forEach(([k,l]) => html += `<button class="${RANK.sort===k?'':'secondary'}" data-rksort="${k}" style="padding:4px 10px; font-size:12px;">${l}</button>`);
+  html += `</div><div class="row" style="margin-bottom:12px;">
+    <label style="display:inline; margin:0;">最小局数<input type="number" id="rkMinCount" value="${minCount}" min="1" style="width:60px; display:inline-block;" onfocus="this.select()"></label>
+    <label style="display:inline; margin:0;">最小手数<input type="number" id="rkMinPly" value="${RANK.minPly}" min="0" style="width:60px; display:inline-block;" onfocus="this.select()"></label>
+  </div>
+  <div class="small" style="margin-bottom:8px;">同じ進行が最小局数以上あり、その先でさらに分かれる(=一番後ろの)局面だけを表示。タップでツリーへ移動。</div>`;
+  if (!list.length) html += `<div class="small" style="color:var(--sub);">該当なし(条件をゆるめてみてほしい)</div>`;
+  list.slice(0, RANK.shown).forEach((item, i) => {
+    const p = bfsPath(trees[RANK.side], item.hash) || [];
+    const tail = p.slice(-4).map(x=>x.move).join(" ");
+    const stat = RANK.sort==="recent" ? `直近${item.recentN}局 / 全${item.n}局` : `${item.n}局 勝率${Math.round(item.rate*100)}%(${item.w}勝${item.n-item.w}敗)`;
+    html += `<div class="edge-item" data-rkhash="${item.hash}">
+      <span class="edge-move">${i+1}. ${item.ply}手目まで</span>
+      <span class="small">${stat}<br>${p.length>4?"… ":""}${tail}</span>
+    </div>`;
+  });
+  if (list.length > RANK.shown) html += `<div style="margin-top:8px;"><button class="secondary" id="rkMore">もっと見る(残り${list.length-RANK.shown}件)</button></div>`;
+  el.innerHTML = html;
+  document.getElementById("rkS").onclick = () => { RANK.side="S"; RANK.shown=10; renderRankingTab(); };
+  document.getElementById("rkG").onclick = () => { RANK.side="G"; RANK.shown=10; renderRankingTab(); };
+  el.querySelectorAll("[data-rksort]").forEach(b => b.onclick = () => { RANK.sort=b.dataset.rksort; RANK.minCount=null; RANK.shown=10; renderRankingTab(); });
+  document.getElementById("rkMinCount").onchange = (e) => { RANK.minCount = Math.max(1, parseInt(e.target.value,10)||1); RANK.shown=10; renderRankingTab(); };
+  document.getElementById("rkMinPly").onchange = (e) => { RANK.minPly = Math.max(0, parseInt(e.target.value,10)||0); RANK.shown=10; renderRankingTab(); };
+  const more = document.getElementById("rkMore");
+  if (more) more.onclick = () => { RANK.shown += 10; renderRankingTab(); };
+  el.querySelectorAll("[data-rkhash]").forEach(item => item.onclick = () => jumpTo(RANK.side, item.dataset.rkhash));
 }
 
 /* ---------- タブ: 局面検索 ---------- */
@@ -705,11 +973,13 @@ function renderSearchTab() {
   };
 }
 
+let SKIP_AUTO_BRANCH = false;
 function jumpTo(sk, hash) {
   const trees = buildTrees();
   const p = bfsPath(trees[sk], hash);
   treeSide = sk;
   treePath = p || [];
+  SKIP_AUTO_BRANCH = true;
   switchTab("tree");
 }
 
@@ -774,35 +1044,7 @@ function renderDashboardTab() {
     </div>`;
   };
 
-  const study = computeStudyRecommendations();
-  const studySection = (title, hint) => {
-    let h = `<div style="flex:1; min-width:260px;">
-      <div style="font-weight:700; margin-bottom:2px;">${title}</div>
-      <div class="small" style="margin-bottom:8px;">${hint}</div>`;
-    ["S","G"].forEach(sk => {
-      const list = title.includes("直近") ? study[sk].recent : title.includes("勝率が高") ? study[sk].best : study[sk].worst;
-      h += `<div class="small" style="font-weight:700; margin:6px 0 4px;">${sk==='S'?'先手':'後手'}</div>`;
-      if (list.length===0) { h += `<div class="small" style="color:var(--sub);">該当なし</div>`; }
-      list.forEach(item => {
-        const rate = Math.round(item.rate*100);
-        h += `<div class="edge-item" data-studysk="${sk}" data-studyhash="${item.hash}">
-          <span class="edge-move">${item.move}</span>
-          <span class="small">${title.includes("直近") ? `直近${item.recentN}回` : `${rate}% (${item.n}局)`}</span>
-        </div>`;
-      });
-    });
-    h += `</div>`;
-    return h;
-  };
-  let html = `<div class="card">
-    <div style="font-weight:800; font-family:'Shippori Mincho',serif; font-size:16px; margin-bottom:2px;">勉強推奨局面</div>
-    <div class="small" style="margin-bottom:10px;">タップするとその局面のツリーに移動する</div>
-    <div class="flex-gap">
-      ${studySection("直近1ヶ月で多い局面", "この1ヶ月で繰り返し出現(先後別TOP3)")}
-      ${studySection("勝率が高い局面", "5局以上出現・得意な局面(先後別TOP3)")}
-      ${studySection("勝率が低い局面", "5局以上出現・苦手な局面、要復習(先後別TOP3)")}
-    </div>
-  </div>`;
+  let html = "";
   html += `<div class="card" style="display:inline-block;">
     <div class="small">総合成績</div>
     <div style="font-size:22px; font-weight:800;">${totalW}勝${totalN-totalW}敗</div>
@@ -838,14 +1080,12 @@ function renderDashboardTab() {
   });
   html += `</tbody></table></div></div>`;
   el.innerHTML = html;
-  el.querySelectorAll("[data-studyhash]").forEach(item => {
-    item.onclick = () => jumpTo(item.dataset.studysk, item.dataset.studyhash);
-  });
   el.querySelectorAll("[data-delid]").forEach(btn => {
-    btn.onclick = () => {
+    btn.onclick = async () => {
       if (!confirm("この対局データを削除する?")) return;
+      try { await deleteGame(btn.dataset.delid); }
+      catch (e) { alert("削除に失敗した: " + e.message); return; }
       GAMES = GAMES.filter(g => String(g.id) !== btn.dataset.delid);
-      saveGames(GAMES);
       renderDashboardTab();
       updateSummaryLine();
     };
@@ -861,6 +1101,13 @@ function renderSettingsTab() {
       <input type="text" id="myNamesInput" value="${MYNAMES.join(", ")}" placeholder="例: TKTDESUYO, TKTdao, issy1484">
       <div class="hint">ここに登録した名前が「先手」または「後手」に出てきた対局を、自分の対局として自動集計する。</div>
       <div style="margin-top:10px;"><button id="btnSaveNames">保存</button></div>
+    </div>
+    <div class="card">
+      <div class="small" style="margin-bottom:8px;">分岐点ジャンプ</div>
+      <label style="display:inline; margin:0;">最多の手の割合が <input type="number" id="jumpTh" value="${getJumpThreshold()}" min="50" max="100" style="width:70px; display:inline-block;"> % 以上の間は自動で進む</label>
+      <div style="margin-top:8px;"><label style="display:inline; margin:0;"><input type="checkbox" id="jumpAuto" ${getJumpAuto()?"checked":""} style="width:auto; display:inline-block;"> 局面ツリーを開いた時(開始局面にいる場合)に自動で分岐点まで進む</label></div>
+      <div class="hint">2局以上通った局面のみ対象。このブラウザに保存される。</div>
+      <div style="margin-top:8px;"><button id="btnSaveJump">保存</button></div>
     </div>
     <div class="card">
       <div class="small" style="margin-bottom:8px;">データの管理</div>
@@ -884,24 +1131,50 @@ function renderSettingsTab() {
     alert("保存した。");
     updateSummaryLine();
   };
+  document.getElementById("btnSaveJump").onclick = () => {
+    const v = Math.min(100, Math.max(50, parseInt(document.getElementById("jumpTh").value,10) || 80));
+    try {
+      localStorage.setItem(LS_JUMP_TH, String(v));
+      localStorage.setItem(LS_JUMP_AUTO, document.getElementById("jumpAuto").checked ? "1" : "0");
+    } catch(e) {}
+    alert("保存した。");
+    renderSettingsTab();
+  };
   document.getElementById("btnExport").onclick = exportBackupJSON;
   document.getElementById("btnImportJson").onclick = () => document.getElementById("fileInput").click();
   document.getElementById("fileInput").onchange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const data = JSON.parse(reader.result);
-        if (data.games) { GAMES = data.games; saveGames(GAMES); }
-        if (data.myNames) { MYNAMES = data.myNames; saveMyNames(MYNAMES); }
-        if (data.notes) { NOTES = data.notes; saveNotes(NOTES); }
-        alert("読み込んだ。");
-        updateSummaryLine();
-        renderSettingsTab();
-      } catch (err) {
-        alert("読み込みに失敗した: " + err.message);
+    reader.onload = async () => {
+      let data;
+      try { data = JSON.parse(reader.result); }
+      catch (err) { alert("読み込みに失敗した: " + err.message); return; }
+
+      if (data.myNames) { MYNAMES = data.myNames; saveMyNames(MYNAMES); }
+
+      let added = 0, skippedDup = 0, limitHit = 0;
+      if (data.games) {
+        const existingTimes = new Set(GAMES.map(g => g.startTime));
+        for (const g of data.games) {
+          if (existingTimes.has(g.startTime)) { skippedDup++; continue; }
+          const res = await insertGame(g);
+          if (res.ok) { GAMES.push(res.row); existingTimes.add(g.startTime); added++; }
+          else if (res.kind === "GAME_LIMIT_REACHED") { limitHit = data.games.length - added - skippedDup; break; }
+          else if (res.kind === "DUPLICATE") { skippedDup++; }
+        }
       }
+      if (data.notes) {
+        for (const key in data.notes) {
+          try { await upsertNote(key, data.notes[key]); NOTES[key] = data.notes[key]; } catch(e) {}
+        }
+      }
+      let msg = `${added}局を取り込んだ。`;
+      if (skippedDup) msg += `(重複${skippedDup}件はスキップ)`;
+      if (limitHit > 0) msg += ` 無料プランの上限(30局)のため、残り${limitHit}局は取り込めなかった。元のJSONファイルはそのまま保管しておき、有料プランに切り替えた後にもう一度読み込めば続きを取り込める。`;
+      alert(msg);
+      updateSummaryLine();
+      renderSettingsTab();
     };
     reader.readAsText(file);
   };
@@ -928,17 +1201,21 @@ function renderSettingsTab() {
     });
     box.innerHTML = html;
     box.querySelectorAll("[data-dupkey]").forEach(btn => {
-      btn.onclick = () => {
+      btn.onclick = async () => {
         const key = btn.dataset.dupkey;
         if (!confirm(`「${key}」の重複分を削除する（1件だけ残す）。よろしいか?`)) return;
         let kept = false;
+        const toDelete = [];
         GAMES = GAMES.filter(g => {
           const k = g.startTime || "(日時不明)";
           if (k !== key) return true;
           if (!kept) { kept = true; return true; }
+          toDelete.push(g.id);
           return false;
         });
-        saveGames(GAMES);
+        for (const id of toDelete) {
+          try { await deleteGame(id); } catch (e) { alert("削除に失敗した: " + e.message); }
+        }
         updateSummaryLine();
         document.getElementById("btnCheckDup").click();
       };
@@ -951,15 +1228,31 @@ function updateSummaryLine() {
   const el = document.getElementById("summaryLine");
   const rows = GAMES.filter(g=>g.tktSide && g.result);
   const w = rows.filter(g=>g.result==="win").length;
-  const remain = daysRemaining();
-  el.textContent = `登録局数: ${GAMES.length}局${rows.length ? `（${w}勝${rows.length-w}敗）` : ""} ｜ 体験期間: 〜9/30(残り${remain}日)`;
+  let planLabel = "";
+  if (CURRENT_PROFILE) {
+    if (CURRENT_PROFILE.is_admin || CURRENT_PROFILE.plan === "pro") {
+      planLabel = " ｜ 無制限プラン";
+    } else {
+      const remainSlots = Math.max(0, 30 - GAMES.length);
+      planLabel = ` ｜ 無料プラン(あと${remainSlots}局まで保存可能)`;
+    }
+  }
+  el.textContent = `登録局数: ${GAMES.length}局${rows.length ? `（${w}勝${rows.length-w}敗）` : ""}${planLabel}`;
 }
 
 function switchTab(name) {
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab===name));
   document.querySelectorAll(".panel").forEach(p => p.classList.toggle("active", p.id==="panel-"+name));
   if (name==="import") renderImportTab();
-  if (name==="tree") renderTreeTab();
+  if (name==="tree") {
+    if (!SKIP_AUTO_BRANCH && treePath.length===0 && getJumpAuto()) {
+      const t = buildTrees()[treeSide];
+      if (t.root) treePath = advanceToBranch(t, [], getJumpThreshold());
+    }
+    SKIP_AUTO_BRANCH = false;
+    renderTreeTab();
+  }
+  if (name==="ranking") renderRankingTab();
   if (name==="search") renderSearchTab();
   if (name==="bookmarks") renderBookmarksTab();
   if (name==="dash") renderDashboardTab();
@@ -970,13 +1263,65 @@ document.querySelectorAll(".tab").forEach(t => {
   t.onclick = () => switchTab(t.dataset.tab);
 });
 
-/* ---------- 初期化 ---------- */
-if (isLocked()) {
-  renderLockScreen();
-} else {
+/* ---------- 認証ゲート ---------- */
+let CURRENT_USER = null;
+let CURRENT_PROFILE = null;
+
+function renderLoginScreen() {
+  document.getElementById("appContainer").style.display = "none";
+  const gate = document.getElementById("authGate");
+  gate.style.display = "block";
+  document.getElementById("authGateCard").innerHTML = `
+    <div class="small" style="margin-bottom:10px;">Googleアカウントでログインして使う。</div>
+    <button id="btnGoogleLogin">Googleでログイン</button>
+  `;
+  document.getElementById("btnGoogleLogin").onclick = async () => {
+    try { await signInWithGoogle(); }
+    catch (e) { alert("ログインに失敗した: " + e.message); }
+  };
+}
+
+function renderAuthErrorScreen(message) {
+  document.getElementById("appContainer").style.display = "none";
+  const gate = document.getElementById("authGate");
+  gate.style.display = "block";
+  document.getElementById("authGateCard").innerHTML = `<div class="warn">${message}</div>`;
+}
+
+async function initApp() {
+  let session;
+  try { session = await getSession(); }
+  catch (e) { renderAuthErrorScreen("認証状態の確認に失敗した: " + e.message); return; }
+
+  if (!session) {
+    renderLoginScreen();
+    onAuthChange((s) => { if (s) location.reload(); });
+    return;
+  }
+
+  document.getElementById("authGate").style.display = "none";
+  document.getElementById("appContainer").style.display = "block";
+  document.getElementById("userEmailLabel").textContent = session.user.email || "";
+  document.getElementById("btnSignOut").onclick = async () => {
+    await signOut();
+    location.reload();
+  };
+
+  try {
+    CURRENT_USER = session.user;
+    CURRENT_PROFILE = await getProfile();
+    GAMES = await listGames();
+    NOTES = await listNotes();
+  } catch (e) {
+    renderAuthErrorScreen("データの読み込みに失敗した: " + e.message);
+    return;
+  }
+
   updateSummaryLine();
   renderImportTab();
 }
+
+initApp();
 </script>
 </body>
 </html>
