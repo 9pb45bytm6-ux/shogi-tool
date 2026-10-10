@@ -58,7 +58,8 @@
   .tip { background: #f4f7ee; border: 1px solid #cfe0b6; color: #3d6b2e; padding: 8px 12px; border-radius: 8px; font-size: 12px; margin-bottom: 10px; }
   table.data { border-collapse: collapse; width: 100%; font-size: 12px; }
   table.data th { background: var(--accent); color: #fff; padding: 6px 8px; text-align: left; }
-  table.data td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  table.data td { padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.data td.wrap { white-space: normal; min-width: 7em; }
 </style>
 </head>
 <body>
@@ -907,7 +908,7 @@ function newEditState(templateId) {
   const t = EDIT_TEMPLATES.find(x => x.id === templateId) || EDIT_TEMPLATES[0];
   const board = t.empty ? {} : initialBoard();
   t.remove.forEach(([c, r]) => { delete board[key(c, r)]; });
-  return { tmpl: t.id, tmplName: t.name, board, hands: { S:{}, G:{} }, turn: t.turn, side: null, tool: null, flip: null, dirty: false };
+  return { tmpl: t.id, tmplName: t.name, board, hands: { S:{}, G:{} }, turn: t.turn, side: null, sel: null, lastOwner: "S", flip: null, dirty: false };
 }
 
 /* 局面の整合性チェック。errors は保存(開始)を止めるもの、warnings は注意するだけのもの */
@@ -954,21 +955,64 @@ function validatePosition(board, hands, turn) {
   return { errors, warnings };
 }
 
-function editApplyCell(col, row) {
-  const E = EDIT, k = key(col, row);
-  if (E.tool && E.tool.type === "place") { E.board[k] = [E.tool.owner, E.tool.piece]; E.dirty = true; }
-  else if (E.tool && E.tool.type === "erase") { delete E.board[k]; E.dirty = true; }
-  else if (E.tool && E.tool.type === "move") {
-    const f = E.tool.from;
-    if (!(f[0] === col && f[1] === row)) {
-      E.board[k] = E.board[key(f[0], f[1])]; delete E.board[key(f[0], f[1])]; E.dirty = true;
-    }
-    E.tool = null;
-  } else if (E.board[k]) { E.tool = { type: "move", from: [col, row] }; }
+/* ---- 駒箱方式: 盤・持ち駒・駒箱の間で駒を動かす。駒の総数は40枚で固定(駒箱 = 総数 − 盤上 − 持ち駒) ---- */
+const BOX_PIECES = ["歩","香","桂","銀","金","角","飛","玉"];
+function boxCounts(E) {
+  const used = {};
+  for (const k in E.board) { const pc = E.board[k][1]; const base = BASE_OF_PROMOTED[pc] || (pc === "王" ? "玉" : pc); used[base] = (used[base] || 0) + 1; }
+  for (const sd of ["S","G"]) for (const code in E.hands[sd]) { const base = CODE_TO_JP[code]; used[base] = (used[base] || 0) + E.hands[sd][code]; }
+  const out = {};
+  BOX_PIECES.forEach(b => { out[b] = Math.max(0, PIECE_LIMITS[b] - (used[b] || 0)); });
+  return out;
+}
+const kingName = (owner) => owner === "G" ? "王" : "玉"; // 表示の慣習: 後手は王、先手は玉
+function editSelectBox(piece) {
+  const E = EDIT;
+  if (E.sel && E.sel.from === "box" && E.sel.piece === piece) { E.sel = null; return; }
+  if (boxCounts(E)[piece] <= 0) return;
+  E.sel = { from: "box", piece, owner: E.lastOwner || "S" };
+}
+function editTapCell(col, row) {
+  const E = EDIT, k = key(col, row), sel = E.sel;
+  if (!sel) { if (E.board[k]) E.sel = { from: "board", col, row }; return; }
+  if (sel.from === "board") {
+    if (sel.col === col && sel.row === row) { E.sel = null; return; }
+    const sk = key(sel.col, sel.row);
+    E.board[k] = E.board[sk]; delete E.board[sk]; E.dirty = true; E.sel = null; return;
+  }
+  // 駒箱から置く(置き先に駒があれば、その駒は駒箱へ戻る)
+  const pc = sel.piece === "玉" ? kingName(sel.owner) : sel.piece;
+  delete E.board[k];
+  if (boxCounts(E)[sel.piece] <= 0) { E.sel = null; return; } // 取り除いた結果を数え直す
+  E.board[k] = [sel.owner, pc]; E.dirty = true; E.lastOwner = sel.owner;
+  if (boxCounts(E)[sel.piece] <= 0) E.sel = null; // 続けて置けるように、残りがある間は選択したまま
+}
+function editToBox() {
+  const E = EDIT;
+  if (E.sel && E.sel.from === "board") { delete E.board[key(E.sel.col, E.sel.row)]; E.dirty = true; }
+  E.sel = null;
+}
+function editFlipOwner() {
+  const E = EDIT, sel = E.sel; if (!sel) return;
+  if (sel.from === "box") { sel.owner = sel.owner === "S" ? "G" : "S"; E.lastOwner = sel.owner; return; }
+  const k = key(sel.col, sel.row), cell = E.board[k]; if (!cell) return;
+  const owner = cell[0] === "S" ? "G" : "S";
+  E.board[k] = [owner, (cell[1] === "玉" || cell[1] === "王") ? kingName(owner) : cell[1]]; E.dirty = true;
+}
+function editTogglePromote() {
+  const E = EDIT, sel = E.sel; if (!sel || sel.from !== "board") return;
+  const k = key(sel.col, sel.row), cell = E.board[k]; if (!cell) return;
+  const pc = cell[1];
+  if (BASE_OF_PROMOTED[pc]) E.board[k] = [cell[0], BASE_OF_PROMOTED[pc]];
+  else if (PROMOTABLE_BASE.has(pc)) E.board[k] = [cell[0], PROMOTED_OF_BASE[pc]];
+  else return;
+  E.dirty = true;
 }
 function editChangeHand(side, code, delta) {
   const h = EDIT.hands[side];
-  const n = Math.max(0, Math.min(18, (h[code] || 0) + delta));
+  const base = CODE_TO_JP[code];
+  if (delta > 0 && boxCounts(EDIT)[base] <= 0) return; // 駒箱に無い駒は持ち駒にできない
+  const n = Math.max(0, (h[code] || 0) + delta);
   if (n === 0) delete h[code]; else h[code] = n;
   EDIT.dirty = true;
 }
@@ -1013,7 +1057,7 @@ function renderPositionEditor() {
     html += `<tr><td class="label">${RANKS[row-1]}</td>`;
     files.forEach(col => {
       const cell = E.board[key(col, row)];
-      const isMoveSrc = E.tool && E.tool.type === "move" && E.tool.from[0] === col && E.tool.from[1] === row;
+      const isMoveSrc = E.sel && E.sel.from === "board" && E.sel.col === col && E.sel.row === row;
       let content = "";
       if (cell) {
         const classes = [cell[0]==="G" ? "p-gote" : "", cell[0]===topSide ? "p-far" : ""].filter(Boolean).join(" ");
@@ -1024,23 +1068,34 @@ function renderPositionEditor() {
     html += `</tr>`;
   }
   html += `</table></div><div style="flex:1; min-width:260px;">`;
-  html += `<div class="small" style="font-weight:700; margin-bottom:4px;">置く駒を選んでから、盤のマスをタップ(続けて何枚でも置ける)</div>`;
-  ["S","G"].forEach(owner => {
-    html += `<div style="margin-bottom:4px;"><span class="small">${owner==="S"?"先手":"後手"}:</span> `;
-    EDIT_PALETTE.forEach(pc => {
-      const on = E.tool && E.tool.type === "place" && E.tool.owner === owner && E.tool.piece === pc;
-      html += `<span class="hand-piece ${on?"selected":""}" data-place="${owner}:${pc}" ${owner==="G"?'style="color:var(--lose);"':""}>${pc}</span>`;
-    });
-    html += `</div>`;
+  const sel = E.sel, bc = boxCounts(E);
+  const ownerName = (o) => o === "S" ? "先手" : "後手";
+  let selText = "盤の駒、または駒箱の駒をタップして選ぶ。選んだら、移動先のマスをタップ(ルールの制限なし。駒の上なら、その駒は駒箱へ戻る)";
+  let actions = "";
+  if (sel && sel.from === "board") {
+    const cell = E.board[key(sel.col, sel.row)];
+    selText = cell ? `選択中: ${ZEN[sel.col-1]}${KAN[sel.row-1]}の${ownerName(cell[0])}の${cell[1]}。移動先のマスをタップ(同じマスで解除)` : selText;
+    actions = `<span class="hand-piece" data-act="flip">向き反転</span>`
+      + (cell && (BASE_OF_PROMOTED[cell[1]] || PROMOTABLE_BASE.has(cell[1])) ? `<span class="hand-piece" data-act="promote">成/不成</span>` : "")
+      + `<span class="hand-piece" data-act="tobox">駒箱へ戻す</span><span class="hand-piece" data-act="cancel">選択解除</span>`;
+  } else if (sel && sel.from === "box") {
+    selText = `選択中: ${ownerName(sel.owner)}の${sel.piece}(残り${bc[sel.piece]}枚)。置くマスをタップ(続けて置ける)`;
+    actions = `<span class="hand-piece" data-act="flip">向き反転(今は${ownerName(sel.owner)})</span><span class="hand-piece" data-act="cancel">選択解除</span>`;
+  }
+  html += `<div class="small" style="margin-bottom:6px;">${selText}</div>`;
+  if (actions) html += `<div style="margin-bottom:8px;">${actions}</div>`;
+  html += `<div class="small" style="font-weight:700; margin-bottom:4px;">駒箱(盤にも持ち駒にもない駒。駒を選んで「駒箱へ戻す」)</div><div style="margin-bottom:6px;">`;
+  BOX_PIECES.forEach(pc => {
+    const on = sel && sel.from === "box" && sel.piece === pc;
+    html += `<span class="hand-piece ${on?"selected":""} ${bc[pc]<=0?"disabled":""}" data-box="${pc}">${pc}×${bc[pc]}</span>`;
   });
-  html += `<div style="margin:6px 0;"><span class="hand-piece ${E.tool&&E.tool.type==="erase"?"selected":""}" data-erase="1">消す</span>
-    <span class="small">${E.tool&&E.tool.type==="move"?"移動先のマスをタップ(同じマスで取消)":"何も選ばずに駒をタップすると、その駒を動かせる"}</span></div>`;
+  html += `</div>`;
   ["S","G"].forEach(sd => {
     html += `<div style="margin-top:6px;"><span class="small" style="font-weight:700;">${sd==="S"?"先手":"後手"}の持ち駒:</span> `;
     HAND_ORDER.forEach(code => {
       const n = E.hands[sd][code] || 0;
       html += `<span class="small" style="margin-right:6px; white-space:nowrap;">${CODE_TO_JP[code]}
-        <span class="hand-piece" data-hand-adj="${sd}:${code}:-1" style="padding:0 6px;">－</span>${n}<span class="hand-piece" data-hand-adj="${sd}:${code}:1" style="padding:0 6px;">＋</span></span>`;
+        <span class="hand-piece" data-hand-adj="${sd}:${code}:-1" style="padding:0 6px;">－</span>${n}<span class="hand-piece ${bc[CODE_TO_JP[code]]<=0?"disabled":""}" data-hand-adj="${sd}:${code}:1" style="padding:0 6px;">＋</span></span>`;
     });
     html += `</div>`;
   });
@@ -1052,9 +1107,13 @@ function renderPositionEditor() {
     <button class="secondary" id="editCancel">やめる</button></div>`;
   el.innerHTML = html;
 
-  el.querySelectorAll("td[data-col]").forEach(td => { td.onclick = () => { editApplyCell(parseInt(td.dataset.col,10), parseInt(td.dataset.row,10)); renderPositionEditor(); }; });
-  el.querySelectorAll("[data-place]").forEach(b => { b.onclick = () => { const [o, pc] = b.dataset.place.split(":"); EDIT.tool = { type:"place", owner:o, piece:pc }; renderPositionEditor(); }; });
-  el.querySelectorAll("[data-erase]").forEach(b => { b.onclick = () => { EDIT.tool = { type:"erase" }; renderPositionEditor(); }; });
+  el.querySelectorAll("td[data-col]").forEach(td => { td.onclick = () => { editTapCell(parseInt(td.dataset.col,10), parseInt(td.dataset.row,10)); renderPositionEditor(); }; });
+  el.querySelectorAll("[data-box]").forEach(b => { b.onclick = () => { if (EDIT.sel && EDIT.sel.from === "board") editToBox(); else editSelectBox(b.dataset.box); renderPositionEditor(); }; });
+  el.querySelectorAll("[data-act]").forEach(b => { b.onclick = () => {
+    const act = b.dataset.act;
+    if (act === "flip") editFlipOwner(); else if (act === "promote") editTogglePromote();
+    else if (act === "tobox") editToBox(); else if (act === "cancel") EDIT.sel = null;
+    renderPositionEditor(); }; });
   el.querySelectorAll("[data-hand-adj]").forEach(b => { b.onclick = () => { const [sd, code, d] = b.dataset.handAdj.split(":"); editChangeHand(sd, code, parseInt(d,10)); renderPositionEditor(); }; });
   document.getElementById("editTmpl").onchange = (e) => {
     if (EDIT.dirty && !confirm("編集した内容は消える。ひな形を切り替える?")) { renderPositionEditor(); return; }
@@ -1595,11 +1654,11 @@ function renderListTab() {
     <button class="secondary" id="btnMergeSelected" disabled>選択した2件を統合</button>
     <span class="small">統合したい研究を2件チェックする</span>
   </div>`;
-  html += `<table class="data"><thead><tr><th></th><th>タイトル</th><th>自分側</th><th>タグ</th><th>開始</th><th>作成日</th><th></th></tr></thead><tbody>`;
+  html += `<div style="overflow-x:auto;"><table class="data"><thead><tr><th></th><th>タイトル</th><th>自分側</th><th>タグ</th><th>開始</th><th>作成日</th><th></th></tr></thead><tbody>`;
   list.slice().reverse().filter(r => !LIST_TAG_FILTER || (r.tags || []).includes(LIST_TAG_FILTER)).forEach(r => {
     html += `<tr>
       <td><input type="checkbox" data-selid="${r.id}"></td>
-      <td>${r.title || "(無題)"}</td>
+      <td class="wrap">${r.title || "(無題)"}</td>
       <td>${r.side==="S"?"先手側":r.side==="G"?"後手側":"未設定"}</td>
       <td>${(r.tags||[]).map(t=>`<span class="chip">${t}</span>`).join("")}</td>
       <td>${r.sourceNote}</td>
@@ -1610,7 +1669,7 @@ function renderListTab() {
       </td>
     </tr>`;
   });
-  html += `</tbody></table>`;
+  html += `</tbody></table></div>`;
   el.innerHTML = html;
   el.querySelectorAll("[data-filtertag]").forEach(c => { c.onclick = () => { LIST_TAG_FILTER = c.dataset.filtertag || null; renderListTab(); }; });
   const checkedIds = () => Array.from(el.querySelectorAll("[data-selid]")).filter(cb => cb.checked).map(cb => cb.dataset.selid);
