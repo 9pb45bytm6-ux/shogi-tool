@@ -65,8 +65,10 @@
   .tray-badge { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); padding: 3px 9px; border-radius: 999px; color: #fff; font-size: 12px; font-weight: 700; background: #6b6b6b; }
   .tray-badge.s { background: #c0392b; }
   .tray-badge.box { background: #8a6a3a; }
-  .tile { position: relative; display: inline-block; padding: 5px 10px; margin: 2px; border: 1px solid var(--border); border-radius: 6px; background: #fdf3d8; font: 700 17px serif; cursor: pointer; }
-  .tile.selected { background: var(--select); }
+  .tile { position: relative; display: inline-block; margin: 3px 3px; cursor: pointer; filter: drop-shadow(0 0 0.7px #6b5a2e) drop-shadow(0 0 0.7px #6b5a2e); }
+  .tile .pc { display: block; width: 28px; padding: 7px 0 5px; text-align: center; background: #fdf3d8; font: 700 17px/1.1 serif; clip-path: polygon(50% 0, 92% 18%, 100% 100%, 0 100%, 8% 18%); }
+  .tile.selected .pc { background: var(--select); }
+  .tile.far .pc { transform: rotate(180deg); }
   .tile .n { position: absolute; top: -7px; right: -5px; font: 700 11px sans-serif; background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 0 4px; color: #333; }
 </style>
 </head>
@@ -541,16 +543,23 @@ let SELECTED = null; // {type:'board', from:[c,r]} | {type:'hand', piece}
 
 /* 研究データ: side = 自分が指す側("S"=先手側 / "G"=後手側 / null=未設定)、tags = 戦型タグ(複数)、
    rootPly = 開始局面が初期局面から何手目か(不明ならnull) */
-const KAIKEI_HINTS = ["対矢倉","対雁木","相掛かり","横歩取り","角換わり45桂馬","角換わり相腰掛け銀","角換わり相早繰り銀",
-  "対角換わり早繰り銀","対角換わり棒銀","対角換わり45桂","対筋違い角","対嬉野流","四間飛車対穴熊","四間飛車対棒銀",
-  "四間飛車対位取り","四間飛車対ミレニアム","四間飛車対45歩","四間飛車対その他","kkf","対向い飛車","対kkf",
-  "対三間飛車急戦","対三間飛車持久戦","対四間飛車急戦","対四間飛車持久戦","対中飛車急戦","対中飛車持久戦"];
 let TAG_HINTS_EXTRA = [];
 async function loadTagHints() { try { TAG_HINTS_EXTRA = await listKaikeiNames(); } catch (e) { TAG_HINTS_EXTRA = []; } }
 function allTagHints() {
-  const set = new Set([...KAIKEI_HINTS, ...TAG_HINTS_EXTRA]);
+  const set = new Set(TAG_HINTS_EXTRA); // 標準タグは持たない。自分の棋譜の戦型名と、自分が研究に付けたタグだけ
   RESEARCHES_CACHE.forEach(r => (r.tags || []).forEach(t => set.add(t)));
   return Array.from(set);
+}
+
+/* 入力中の文字に一致する候補だけを返す(空入力・追加済みのタグは出さない) */
+function tagSuggestions(query, tags) {
+  const q = (query || "").trim().toLowerCase(); if (!q) return [];
+  return allTagHints().filter(h => !(tags || []).includes(h) && h.toLowerCase().includes(q)).slice(0, 8);
+}
+function flushTagInput() { // 入力欄に残っている文字があれば、タグとして追加する
+  const inp = document.getElementById("tagInput"); if (!inp || !CURRENT) return;
+  const v = (inp.value || "").trim(); if (!v) return;
+  CURRENT.tags = CURRENT.tags || []; if (!CURRENT.tags.includes(v)) CURRENT.tags.push(v); inp.value = "";
 }
 
 function newEmptyResearch(sourceNote, side) {
@@ -879,15 +888,24 @@ function renderTagArea() {
   const tags = CURRENT.tags || (CURRENT.tags = []);
   let html = `<span class="small">戦型タグ:</span> `;
   tags.forEach((t, i) => { html += `<span class="chip">${t}<span class="x" data-rmtag="${i}">×</span></span>`; });
-  html += `<input type="text" id="tagInput" list="tagHints" placeholder="タグを追加(Enterで確定)" style="width:200px;">`;
-  html += `<datalist id="tagHints">${allTagHints().filter(h => !tags.includes(h)).map(h => `<option value="${h.replace(/"/g,"&quot;")}">`).join("")}</datalist>`;
+  html += `<input type="text" id="tagInput" autocomplete="off" placeholder="タグを追加(Enterか追加ボタン)" style="width:200px;"> <button type="button" class="secondary" id="tagAddBtn" style="padding:3px 10px; font-size:11px;">追加</button>
+    <div id="tagSuggest" style="min-height:0;"></div>`;
   area.innerHTML = html;
-  const add = () => {
-    const inp = document.getElementById("tagInput"); const v = inp.value.trim();
-    if (v && !tags.includes(v)) { tags.push(v); renderTagArea(); const i2 = document.getElementById("tagInput"); if (i2) i2.focus(); }
+  const addTag = (v) => {
+    v = (v || "").trim();
+    if (v && !tags.includes(v)) { tags.push(v); }
+    renderTagArea(); const i2 = document.getElementById("tagInput"); if (i2) i2.focus();
   };
-  document.getElementById("tagInput").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } };
-  document.getElementById("tagInput").onchange = add;
+  const inp = document.getElementById("tagInput");
+  const showSuggest = () => {
+    const box = document.getElementById("tagSuggest"); if (!box) return;
+    const m = tagSuggestions(inp.value, tags);
+    box.innerHTML = m.map((h, i) => `<span class="chip" data-sg="${i}" style="cursor:pointer;">${h}</span>`).join("");
+    box.querySelectorAll("[data-sg]").forEach(c => { c.onclick = () => addTag(m[parseInt(c.dataset.sg, 10)]); });
+  };
+  inp.oninput = showSuggest; // 文字を入力している間だけ候補を出す(入力欄を選んだだけ・追加した直後は出さない)
+  inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); addTag(inp.value); } };
+  document.getElementById("tagAddBtn").onclick = () => addTag(inp.value);
   area.querySelectorAll("[data-rmtag]").forEach(x => { x.onclick = () => { tags.splice(parseInt(x.dataset.rmtag, 10), 1); renderTagArea(); }; });
 }
 
@@ -1097,21 +1115,19 @@ function renderPositionEditor() {
   const sel = E.sel, bc = boxCounts(E);
   const ownerName = (o) => o === "S" ? "先手" : "後手";
   const topSide = flip ? "S" : "G", bottomSide = flip ? "G" : "S";
-  let selText = "盤・駒台・駒箱の駒をタップで選び、行き先(マス・駒台・駒箱)をタップ。盤の駒を素早く2回タップすると、歩→と→反対の歩→反対のと…と切り替わる";
+  let selText = "盤・駒台・駒箱の駒をタップで選び、行き先(マス・駒台・駒箱)をタップ。盤の駒を素早く2回タップすると、歩→と→反対の歩→反対のと…と切り替わる。選択の解除は、選んだ駒をもう一度ゆっくりタップ";
   if (sel && sel.from === "board") { const cell = E.board[key(sel.col, sel.row)]; if (cell) selText = `選択中: ${ZEN[sel.col-1]}${KAN[sel.row-1]}の${ownerName(cell[0])}の${cell[1]}。行き先をタップ(相手の駒の上なら、取って自分の駒台へ)`; }
   else if (sel && sel.from === "box") selText = `選択中: 駒箱の${sel.piece}(残り${bc[sel.piece]}枚)。置くマスか駒台をタップ(続けて置ける)`;
   else if (sel && sel.from === "hand") selText = `選択中: ${ownerName(sel.side)}の駒台の${CODE_TO_JP[sel.code]}。行き先をタップ`;
   const handTiles = (sd) => HAND_ORDER.filter(code => (E.hands[sd][code] || 0) > 0).map(code => {
     const n = E.hands[sd][code], on = sel && sel.from === "hand" && sel.side === sd && sel.code === code;
-    return `<span class="tile ${on?"selected":""} ${sd==="G"?"p-gote":""}" data-hand="${sd}:${code}">${CODE_TO_JP[code]}${n>1?`<span class="n">${n}</span>`:""}</span>`;
+    return `<span class="tile ${on?"selected":""} ${sd==="G"?"p-gote far":""}" data-hand="${sd}:${code}"><span class="pc">${CODE_TO_JP[code]}</span>${n>1?`<span class="n">${n}</span>`:""}</span>`;
   }).join("");
   const handTray = (sd) => `<div class="tray" data-zone="${sd}">${handTiles(sd)}<span class="tray-badge ${sd==="S"?"s":""}">${ownerName(sd)}</span></div>`;
   const boxTiles = BOX_ORDER.filter(pc => bc[pc] > 0).map(pc => {
     const on = sel && sel.from === "box" && sel.piece === pc;
-    return `<span class="tile ${on?"selected":""}" data-box="${pc}">${pc}${bc[pc]>1?`<span class="n">${bc[pc]}</span>`:""}</span>`;
+    return `<span class="tile ${on?"selected":""}" data-box="${pc}"><span class="pc">${pc}</span>${bc[pc]>1?`<span class="n">${bc[pc]}</span>`:""}</span>`;
   }).join("");
-  html += `<div class="small" style="margin-bottom:6px;">${selText}</div>`;
-  if (sel) html += `<div style="margin-bottom:6px;"><span class="hand-piece" data-act="cancel">選択解除</span></div>`;
   html += `<div style="display:inline-block;">`;
   html += handTray(topSide);
   html += `<table class="board-table"><tr><td class="label"></td>`;
@@ -1135,6 +1151,7 @@ function renderPositionEditor() {
   html += `</table>`;
   html += handTray(bottomSide);
   html += `<div class="tray" data-zone="box">${boxTiles}<span class="tray-badge box">駒箱</span></div>`;
+  html += `<div class="small" style="min-height:5.2em; margin-top:6px;">${selText}</div>`; // 説明は盤の下に固定の高さで置く(選択しても盤の位置が動かない)
   html += `</div>`;
   v.errors.forEach(m => html += `<div class="warn">✕ ${m}</div>`);
   v.warnings.forEach(m => html += `<div class="tip" style="background:#fff8e6; border-color:#e6d28f; color:#7a6420;">△ ${m}</div>`);
@@ -1147,7 +1164,6 @@ function renderPositionEditor() {
   el.querySelectorAll("[data-box]").forEach(t => { t.onclick = (ev) => { ev.stopPropagation(); editTapBoxChip(t.dataset.box); renderPositionEditor(); }; });
   el.querySelectorAll("[data-hand]").forEach(t => { t.onclick = (ev) => { ev.stopPropagation(); const [sd, code] = t.dataset.hand.split(":"); editTapHandChip(sd, code); renderPositionEditor(); }; });
   el.querySelectorAll("[data-zone]").forEach(z => { z.onclick = () => { editTapZone(z.dataset.zone); renderPositionEditor(); }; });
-  el.querySelectorAll("[data-act]").forEach(b => { b.onclick = () => { if (b.dataset.act === "cancel") { EDIT.sel = null; EDIT.lastTap = null; } renderPositionEditor(); }; });
   document.getElementById("editTmpl").onchange = (e) => {
     if (EDIT.dirty && !confirm("編集した内容は消える。ひな形を切り替える?")) { renderPositionEditor(); return; }
     const side = EDIT.side; EDIT = newEditState(e.target.value); EDIT.side = side; renderPositionEditor();
@@ -1623,6 +1639,7 @@ function renderEditorTab() {
     CURRENT = null; PATH = []; SELECTED = null; renderEditorTab();
   };
   document.getElementById("btnSaveResearch").onclick = async () => {
+    flushTagInput();
     if (!CURRENT.side) { alert("先手側の研究か後手側の研究かを選んでから保存してほしい。"); return; }
     const btn = document.getElementById("btnSaveResearch");
     btn.disabled = true; btn.textContent = "保存中...";
