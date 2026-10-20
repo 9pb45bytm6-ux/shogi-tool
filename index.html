@@ -248,6 +248,13 @@ async function insertGame(gameApp) {
   return { ok: true, row: gameRowToApp(data) };
 }
 
+/* 保存済みの1局の「自分の先後」と「勝敗」だけを書き換える */
+async function updateGameJudge(id, tktSide, result) {
+  const sb = getClient();
+  const { error } = await sb.from("games").update({ tkt_side: tktSide, result }).eq("id", id);
+  if (error) throw error;
+}
+
 async function deleteGame(id) {
   const sb = getClient();
   const { error } = await sb.from("games").delete().eq("id", id);
@@ -1119,6 +1126,12 @@ function renderSettingsTab() {
       <div class="hint">端末やブラウザを変える時は、書き出したJSONファイルを新しい環境で読み込めばデータを引き継げる。</div>
     </div>
     <div class="card">
+      <div class="small" style="margin-bottom:8px;">保存済みの対局の先後・勝敗を再判定</div>
+      <div class="hint" style="margin-bottom:8px;">自分のIDを登録する前に取り込んだ対局(先後が「?」の対局)を、上で登録したIDで判定し直す。先後がすでに分かっている対局は変更しない。投了で終わった対局として勝敗を付けるため、千日手・中断で終わった対局は、勝敗が正しくならない場合がある。</div>
+      <button class="secondary" id="btnRejudge">先後・勝敗を再判定する</button>
+      <div id="rejudgeResult" style="margin-top:10px;"></div>
+    </div>
+    <div class="card">
       <div class="small" style="margin-bottom:8px;">重複データのチェック</div>
       <div class="hint" style="margin-bottom:8px;">開始日時が完全に一致する対局が複数登録されていないか確認する。過去に同じ棋譜を2回貼り付けてしまった場合などに使う。</div>
       <button class="secondary" id="btnCheckDup">重複をチェックする</button>
@@ -1177,6 +1190,27 @@ function renderSettingsTab() {
       renderSettingsTab();
     };
     reader.readAsText(file);
+  };
+
+  document.getElementById("btnRejudge").onclick = async () => {
+    const box = document.getElementById("rejudgeResult");
+    if (!MYNAMES.length) { box.innerHTML = `<div class="warn">先に上の欄に自分の将棋ウォーズIDを入力して「保存」を押してほしい。</div>`; return; }
+    const plan = [];
+    GAMES.forEach(g => {
+      if (g.tktSide) return;
+      const r = computeResult({ sente: g.sente, gote: g.gote, resignMoveNum: (g.moveTokens || []).length + 1, endReason: "投了" }, MYNAMES);
+      if (r.tktSide) plan.push({ g, tktSide: r.tktSide, result: r.result });
+    });
+    if (!plan.length) { box.innerHTML = `<div class="tip">再判定の対象になる対局は無かった(先後が「?」の対局のうち、登録したIDが出てくるものが無い)。</div>`; return; }
+    const wins = plan.filter(x => x.result === "win").length, loses = plan.filter(x => x.result === "lose").length;
+    if (!confirm(`${plan.length}局の先後を判定し直す(勝ち${wins}・負け${loses}・勝敗なし${plan.length - wins - loses})。よろしいか?`)) return;
+    let ok = 0, ng = 0;
+    for (const x of plan) {
+      try { await updateGameJudge(x.g.id, x.tktSide, x.result); x.g.tktSide = x.tktSide; x.g.result = x.result; ok++; }
+      catch (e) { ng++; }
+    }
+    box.innerHTML = `<div class="tip">${ok}局を更新した。${ng ? ng + "局は更新に失敗した。" : ""}</div>`;
+    updateSummaryLine();
   };
 
   document.getElementById("btnCheckDup").onclick = () => {
