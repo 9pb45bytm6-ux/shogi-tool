@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>エンジン試験ページ</title>
+<style>
+  body { font-family: -apple-system, "Hiragino Sans", sans-serif; margin: 16px; line-height: 1.6; color: #222; max-width: 900px; }
+  h1 { font-size: 20px; }
+  .box { border: 1px solid #ccc; border-radius: 8px; padding: 10px 14px; margin: 10px 0; }
+  .ok { color: #0a7d2c; font-weight: 700; }
+  .ng { color: #c0392b; font-weight: 700; }
+  button { font-size: 15px; padding: 8px 16px; margin-right: 8px; border-radius: 6px; border: 1px solid #888; background: #f3f3f3; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; }
+  th { background: #f0f0f0; }
+  td.pv { word-break: break-all; font-family: monospace; font-size: 12px; }
+  pre { background: #111; color: #cfc; padding: 8px; border-radius: 6px; max-height: 240px; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+  input[type=text] { width: 100%; box-sizing: border-box; font-family: monospace; padding: 4px; }
+  label { margin-right: 12px; }
+</style>
+<!-- 1) GitHub Pagesでは自分でヘッダーを付けられないので、補助ファイルで代用する(初回だけ自動でリロードされる) -->
+<script src="coi-serviceworker.js"></script>
+</head>
+<body>
+<h1>エンジン試験ページ(段階1)</h1>
+<div class="small">やねうら王(WebAssembly・水匠内蔵版)がこのサイト上で動くかを確かめるための試験ページです。本物のサイトには影響しません。</div>
+
+<div class="box">
+  <b>1. 動作環境の確認</b>
+  <div id="env"></div>
+</div>
+
+<div class="box">
+  <b>2. エンジン</b><br>
+  <label>スレッド数 <select id="threads"></select></label>
+  <label>候補手の数 <select id="multipv"><option>1</option><option>2</option><option selected>3</option><option>5</option></select></label>
+  <label>考える時間(秒) <select id="secs"><option>1</option><option selected>3</option><option>10</option><option>30</option></select></label><br><br>
+  <button id="btnStart">エンジン起動</button>
+  <button id="btnGo" disabled>検討開始</button>
+  <button id="btnStop" disabled>停止</button>
+  <div id="status" style="margin-top:8px;">未起動</div>
+  <div style="margin-top:8px;">局面(USI形式。初期局面なら <code>startpos</code>):</div>
+  <input type="text" id="pos" value="startpos">
+</div>
+
+<div class="box">
+  <b>3. 結果</b>
+  <div id="summary"></div>
+  <table id="tbl"><thead><tr><th>順位</th><th>評価値(先手から見て)</th><th>深さ</th><th>速度(NPS)</th><th>読み筋(USI形式)</th></tr></thead><tbody></tbody></table>
+</div>
+
+<details class="box"><summary>エンジンのログ(問題があればここを見せてください)</summary><pre id="log"></pre></details>
+
+<script src="yaneuraou.k-p.js"></script>
+<script>
+// ---- 表示用の小さな部品 ----
+function $(id) { return document.getElementById(id); }
+function logLine(s) { const el = $("log"); el.textContent += s + "\n"; el.scrollTop = el.scrollHeight; }
+function setStatus(s, cls) { const el = $("status"); el.textContent = s; el.className = cls || ""; }
+
+// ---- USIの info 行を読む(試験用) ----
+function parseInfo(line) {
+  if (!line.startsWith("info ")) return null;
+  const t = line.trim().split(/\s+/);
+  const r = { multipv: 1 };
+  for (let i = 1; i < t.length; i++) {
+    const k = t[i];
+    if (k === "depth") r.depth = +t[++i];
+    else if (k === "multipv") r.multipv = +t[++i];
+    else if (k === "nodes") r.nodes = +t[++i];
+    else if (k === "nps") r.nps = +t[++i];
+    else if (k === "score") { const kind = t[++i]; const v = +t[++i]; r.score = { kind, v }; }
+    else if (k === "pv") { r.pv = t.slice(i + 1); break; }
+  }
+  if (r.depth == null || !r.score || !r.pv) return null;
+  return r;
+}
+function fmtScore(s) { return s.kind === "mate" ? "詰み " + (s.v > 0 ? "+" : "") + s.v + "手" : (s.v > 0 ? "+" : "") + s.v; }
+
+// ---- 環境の確認 ----
+(function envCheck() {
+  const rows = [];
+  const add = (name, ok, note) => rows.push(`<div>${name}: <span class="${ok ? "ok" : "ng"}">${ok ? "OK" : "NG"}</span> ${note || ""}</div>`);
+  add("セキュアな接続(https)", window.isSecureContext);
+  add("ヘッダーの代用(crossOriginIsolated)", window.crossOriginIsolated === true, window.crossOriginIsolated ? "" : "→ ページが自動でリロードされるはずです。リロード後もNGなら、下の「ログ」と一緒に知らせてください。");
+  add("SharedArrayBuffer", typeof SharedArrayBuffer !== "undefined");
+  add("エンジンの読み込み(yaneuraou.k-p.js)", typeof YaneuraOu_K_P === "function", typeof YaneuraOu_K_P === "function" ? "" : "→ ファイルが無いか、読み込めていません。");
+  $("env").innerHTML = rows.join("");
+  $("env").insertAdjacentHTML("beforeend", `<div>CPUの論理コア数: ${navigator.hardwareConcurrency || "不明"} / ブラウザ: ${navigator.userAgent}</div>`);
+  const sel = $("threads"); const max = Math.min(8, navigator.hardwareConcurrency || 2);
+  for (let n = 1; n <= max; n++) { const o = document.createElement("option"); o.value = n; o.textContent = n; if (n === Math.min(4, max)) o.selected = true; sel.appendChild(o); }
+})();
+
+// ---- エンジン ----
+let ENG = null, waiters = [], best = {}, t0 = 0, searching = false;
+function onLine(line) {
+  line = String(line);
+  logLine("< " + line);
+  waiters = waiters.filter(w => { if (line.startsWith(w.prefix)) { w.res(line); return false; } return true; });
+  const r = parseInfo(line);
+  if (r) { best[r.multipv] = r; renderTable(); }
+  if (line.startsWith("bestmove")) {
+    searching = false; $("btnGo").disabled = false; $("btnStop").disabled = true;
+    const sec = ((performance.now() - t0) / 1000).toFixed(1);
+    const top = best[1];
+    $("summary").innerHTML = `<span class="ok">検討が終わりました</span>(${sec}秒) / 最善手: <b>${line.split(" ")[1]}</b>` + (top ? ` / 評価値 ${fmtScore(top.score)} / 深さ ${top.depth} / 速度 約${(top.nps || 0).toLocaleString()} 局面/秒` : "");
+    setStatus("待機中", "ok");
+  }
+}
+function send(cmd) { logLine("> " + cmd); ENG.postMessage(cmd); }
+function waitFor(prefix, ms) {
+  return new Promise((res, rej) => {
+    const to = setTimeout(() => rej(new Error(prefix + " が返ってきません(" + ms / 1000 + "秒)")), ms);
+    waiters.push({ prefix, res: (l) => { clearTimeout(to); res(l); } });
+  });
+}
+function renderTable() {
+  const tb = $("tbl").querySelector("tbody"); tb.innerHTML = "";
+  Object.keys(best).sort((a, b) => a - b).forEach(k => {
+    const r = best[k];
+    tb.insertAdjacentHTML("beforeend", `<tr><td>${k}</td><td>${fmtScore(r.score)}</td><td>${r.depth}</td><td>${(r.nps || 0).toLocaleString()}</td><td class="pv">${r.pv.slice(0, 12).join(" ")}</td></tr>`);
+  });
+}
+
+$("btnStart").onclick = async () => {
+  $("btnStart").disabled = true; setStatus("エンジンを起動しています…(初回は少し時間がかかります)");
+  try {
+    if (typeof YaneuraOu_K_P !== "function") throw new Error("エンジンのファイルが読み込めていません");
+    ENG = await YaneuraOu_K_P();
+    ENG.addMessageListener(onLine);
+    send("usi"); await waitFor("usiok", 20000);
+    send("setoption name USI_Hash value 64");
+    send("setoption name Threads value " + $("threads").value);
+    send("setoption name MultiPV value " + $("multipv").value);
+    send("isready"); await waitFor("readyok", 30000);
+    send("usinewgame");
+    setStatus("起動しました。「検討開始」を押してください", "ok");
+    $("btnGo").disabled = false;
+  } catch (e) {
+    setStatus("起動に失敗: " + (e && e.message ? e.message : e), "ng"); logLine("ERROR " + (e && e.stack || e));
+    $("btnStart").disabled = false;
+  }
+};
+$("btnGo").onclick = () => {
+  best = {}; renderTable(); $("summary").textContent = "";
+  send("setoption name MultiPV value " + $("multipv").value);
+  const p = $("pos").value.trim() || "startpos";
+  send("position " + (p.startsWith("sfen") || p.startsWith("startpos") ? p : "sfen " + p));
+  t0 = performance.now(); searching = true;
+  $("btnGo").disabled = true; $("btnStop").disabled = false; setStatus("検討中…");
+  send("go movetime " + (+$("secs").value * 1000));
+};
+$("btnStop").onclick = () => { if (searching) send("stop"); };
+</script>
+</body>
+</html>
