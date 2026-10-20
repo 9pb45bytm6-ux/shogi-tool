@@ -730,15 +730,18 @@ function renderImportTab() {
 function renderImportPreview() {
   const box = document.getElementById("importPreview");
   if (pendingImports.length === 0) { box.innerHTML = ""; return; }
-  let html = `<div class="card"><div class="small" style="margin-bottom:8px;">${pendingImports.length}局検出。戦型タグを入力して「保存」を押してほしい(空欄でも保存可、後から変更可)。</div>`;
+  const dupCount = pendingImports.filter(i => i.dup).length;
+  const newCount = pendingImports.length - dupCount;
+  const unknownCount = pendingImports.filter(i => !i.dup && !i.tktSide).length;
+  let html = `<div class="card"><div class="small" style="margin-bottom:8px;">${pendingImports.length}局検出${dupCount ? `(うち重複${dupCount}局は保存されません)` : ""}。` +
+    (newCount ? `保存される${newCount}局に戦型タグを入力して「保存」を押してほしい(空欄でも保存可、後から変更可)。` : `すべて重複のため、保存する対局はありません。`) + `</div>`;
+  if (unknownCount) {
+    html += `<div class="warn" style="margin-bottom:8px;">${unknownCount}局が「先後不明」(勝敗が付かず、勝率に入らない)。` +
+      (MYNAMES.length ? `登録済みのID(${MYNAMES.join(", ")})がこの棋譜に出てこない。IDの綴りを確認してほしい。` : `自分の将棋ウォーズIDが未登録。先に「設定」タブでIDを登録してから、もう一度読み込んでほしい。`) + `</div>`;
+  }
   pendingImports.forEach((item, idx) => {
     const p = item.parsed;
-    if (item.dup) {
-      html += `<div class="row" style="margin-bottom:8px; opacity:0.6;">
-        <span class="small">${p.startTime} ${p.sente} vs ${p.gote} → <b>重複(既存データにあり・スキップ)</b></span>
-      </div>`;
-      return;
-    }
+    if (item.dup) return; // 重複は下にまとめて表示する
     const sideLabel = item.tktSide === "S" ? "先手" : item.tktSide === "G" ? "後手" : "不明(自分のIDに一致せず)";
     const resultLabel = item.result === "win" ? "勝ち" : item.result === "lose" ? "負け" : "判定不可";
     const resultColor = item.result === "win" ? "var(--win)" : item.result === "lose" ? "var(--lose)" : "#999";
@@ -750,16 +753,26 @@ function renderImportPreview() {
       <input type="text" list="kaikeiHints" placeholder="戦型タグ(任意)" style="width:200px;" data-idx="${idx}" class="kaikeiInput">
     </div>`;
   });
+  if (dupCount) {
+    html += `<div style="background:#eee; border-radius:6px; padding:8px; margin:8px 0; color:#666;"><div class="small" style="font-weight:700; margin-bottom:4px;">重複(保存されません) ${dupCount}局</div>`;
+    pendingImports.forEach(item => {
+      if (!item.dup) return; const p = item.parsed;
+      html += `<div class="small">${p.startTime || "(日時不明)"} ｜ ${p.sente || "?"} vs ${p.gote || "?"} → 既存データにあり・スキップ</div>`;
+    });
+    html += `</div>`;
+  }
   html += `<datalist id="kaikeiHints">${KAIKEI_HINTS.map(k=>`<option value="${k}">`).join("")}</datalist>`;
-  html += `<button id="btnSaveImports">この内容で保存</button></div>`;
+  if (newCount) html += `<button id="btnSaveImports">この内容で保存</button>`;
+  html += `</div>`;
   box.innerHTML = html;
   box.querySelectorAll(".kaikeiInput").forEach(inp => {
     inp.oninput = (e) => { pendingImports[e.target.dataset.idx].kaikei = e.target.value; };
   });
-  document.getElementById("btnSaveImports").onclick = async () => {
+  const saveBtn = document.getElementById("btnSaveImports");
+  if (saveBtn) saveBtn.onclick = async () => {
     const btn = document.getElementById("btnSaveImports");
     btn.disabled = true; btn.textContent = "保存中...";
-    let added = 0, limitHit = false;
+    let added = 0, limitHit = false, skippedDup = dupCount;
     for (const item of pendingImports) {
       if (item.dup) continue;
       if (limitHit) break;
@@ -771,11 +784,13 @@ function renderImportPreview() {
       });
       if (res.ok) { GAMES.push(res.row); added++; }
       else if (res.kind === "GAME_LIMIT_REACHED") { limitHit = true; }
-      else if (res.kind !== "DUPLICATE") { alert("保存に失敗した局がある: " + (res.error && res.error.message)); }
+      else if (res.kind === "DUPLICATE") { skippedDup++; }
+      else { alert("保存に失敗した局がある: " + (res.error && res.error.message)); }
     }
     pendingImports = [];
     document.getElementById("importText").value = "";
     let msg = `${added}局を保存した。`;
+    if (skippedDup) msg += `(重複${skippedDup}局は保存していない)`;
     if (limitHit) msg += ` 無料プランの上限(30局)に達したため、これ以上は保存できなかった。有料プランで解放できる。`;
     document.getElementById("importPreview").innerHTML = `<div class="card">${msg}</div>`;
     updateSummaryLine();
