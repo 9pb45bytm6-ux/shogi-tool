@@ -881,7 +881,7 @@ function renderTreeTab() {
     const sourceNote = `サイト1(${treeSide==='S'?'先手番':'後手番'}ツリー${pathLabel?": "+pathLabel:""})より`;
     try {
       localStorage.setItem("shogi_handoff", JSON.stringify({ board: node.snap.board, hands: node.snap.hands, turn: node.snap.turn, sourceNote, ply: treePath.length, side: treeSide }));
-      location.href = "kenkyu.html";
+      location.href = "kenkyu/";
     } catch (e) {
       alert("研究サイトへの連携に失敗した。");
     }

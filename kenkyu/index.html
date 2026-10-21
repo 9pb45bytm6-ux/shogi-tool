@@ -1,0 +1,2164 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>将棋 研究保存ツール</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;800&display=swap" rel="stylesheet" crossorigin="anonymous">
+<script src="coi-serviceworker.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js" crossorigin="anonymous"></script>
+<style>
+  :root {
+    --bg: #fbf6ea; --panel: #fdf6e6; --border: #e3d3a8; --ink: #3a2e18; --sub: #8a7a5c;
+    --accent: #8a6d3b; --board-bg: #f2dcae; --board-line: #a98d5c; --win: #3d6b2e; --lose: #8a2e2e;
+    --highlight: #c9e6a8; --select: #f6c85c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", sans-serif;
+    background: linear-gradient(175deg, #f8f3e7 0%, #f1e7d2 55%, #ece0c6 100%);
+    background-attachment: fixed; color: var(--ink); margin: 0; padding: 16px;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; }
+  h1 { font-family: "Shippori Mincho", serif; font-size: 22px; font-weight: 800; margin: 0 0 4px; }
+  .subtitle { font-size: 12px; color: var(--sub); margin-bottom: 16px; }
+  .tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--border); margin-bottom: 16px; flex-wrap: wrap; }
+  .tab { padding: 8px 14px; cursor: pointer; font-weight: 700; font-size: 14px; color: var(--sub); border-bottom: 3px solid transparent; margin-bottom: -2px; }
+  .tab.active { color: var(--ink); border-bottom-color: var(--accent); }
+  .panel { display: none; } .panel.active { display: block; }
+  textarea, input[type=text] { width: 100%; font-family: inherit; font-size: 13px; padding: 8px; border: 1px solid var(--border); border-radius: 7px; background: #fffdf9; color: var(--ink); }
+  textarea { min-height: 60px; resize: vertical; }
+  button { font-family: inherit; font-size: 13px; font-weight: 700; padding: 8px 16px; border-radius: 7px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; box-shadow: 0 1px 2px rgba(58,46,24,0.15); }
+  button.secondary { background: #fff; color: var(--accent); box-shadow: none; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .card { background: #fffdf9; border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin-bottom: 12px; box-shadow: 0 2px 6px rgba(58,46,24,0.06); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .small { font-size: 12px; color: var(--sub); }
+  .board-table { border-collapse: collapse; box-shadow: 0 2px 8px rgba(58,46,24,0.10); }
+  .board-table td { width: 32px; height: 34px; border: 1px solid var(--board-line); background: var(--board-bg); text-align: center; font-size: 16px; font-weight: 700; font-family: serif; cursor: default; position: relative; }
+  .board-table .label { border: none; background: transparent; font-size: 11px; color: var(--sub); width: 20px; box-shadow: none; }
+  .board-table td.clickable { cursor: pointer; }
+  .board-table td.selected { background: var(--select); }
+  .board-table td.target { background: var(--highlight); }
+  .gote-piece { color: var(--lose); transform: rotate(180deg); display: inline-block; }
+  .p-gote { color: var(--lose); }
+  .p-far { transform: rotate(180deg); display: inline-block; }
+  .chip { display: inline-block; padding: 2px 8px; margin: 2px 4px 2px 0; border-radius: 999px; border: 1px solid var(--border); background: #fffdf9; font-size: 12px; }
+  .chip.on { background: var(--select); font-weight: 700; }
+  .chip .x { cursor: pointer; margin-left: 4px; color: var(--sub); }
+  .hand-piece { display: inline-block; padding: 4px 10px; margin: 2px; border-radius: 6px; border: 1px solid var(--border); background: #fffdf9; cursor: pointer; font-size: 13px; }
+  .hand-piece.selected { background: var(--select); }
+  .hand-piece.disabled { opacity: 0.3; cursor: default; }
+  .edge-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-radius: 7px; background: #fffdf9; border: 1px solid var(--border); cursor: pointer; margin-bottom: 6px; }
+  .crumb { font-size: 13px; color: var(--sub); line-height: 1.8; margin-bottom: 10px; }
+  .crumb a { color: var(--accent); cursor: pointer; font-weight: 600; }
+  .flex-gap { display: flex; gap: 24px; flex-wrap: wrap; }
+  .warn { background: #fbeee6; border: 1px solid #e3b898; color: #8a4a2e; padding: 8px 12px; border-radius: 8px; font-size: 12px; margin-bottom: 10px; }
+  .tip { background: #f4f7ee; border: 1px solid #cfe0b6; color: #3d6b2e; padding: 8px 12px; border-radius: 8px; font-size: 12px; margin-bottom: 10px; }
+  table.data { border-collapse: collapse; width: 100%; font-size: 12px; }
+  table.data th { background: var(--accent); color: #fff; padding: 6px 8px; text-align: left; }
+  table.data td { padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.data td.wrap { white-space: normal; min-width: 7em; }
+  .board-table td, .tile, .tray { touch-action: manipulation; -webkit-user-select: none; user-select: none; }
+  .tray { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-height: 46px; padding: 4px 70px 4px 6px; background: #ebcb98; border: 1px solid #b98a4a; border-radius: 4px; box-sizing: border-box; width: 100%; margin: 4px 0; }
+  .tray-badge { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); padding: 3px 9px; border-radius: 999px; color: #fff; font-size: 12px; font-weight: 700; background: #6b6b6b; }
+  .tray-badge.s { background: #c0392b; }
+  .tray-badge.box { background: #8a6a3a; }
+  .tile { position: relative; display: inline-block; margin: 3px 3px; cursor: pointer; filter: drop-shadow(0 0 0.7px #6b5a2e) drop-shadow(0 0 0.7px #6b5a2e); }
+  .tile .pc { display: block; width: 28px; padding: 7px 0 5px; text-align: center; background: #fdf3d8; font: 700 17px/1.1 serif; clip-path: polygon(50% 0, 92% 18%, 100% 100%, 0 100%, 8% 18%); }
+  .tile.selected .pc { background: var(--select); }
+  .tile.far .pc { transform: rotate(180deg); }
+  .tile .n { position: absolute; top: -7px; right: -5px; font: 700 11px sans-serif; background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 0 4px; color: #333; }
+</style>
+</head>
+<body>
+<div class="wrap" id="authGate">
+  <h1>将棋 研究保存ツール</h1>
+  <div class="card" id="authGateCard"><div class="small">読み込み中...</div></div>
+</div>
+
+<div class="wrap" id="appContainer" style="display:none;">
+  <h1>将棋 研究保存ツール</h1>
+  <div class="subtitle" id="summaryLine">局面をタップして手を進め、研究手順を分岐ツリーとして保存できる（姉妹サイト）</div>
+  <div class="row" style="justify-content:flex-end; margin-bottom:6px;">
+    <span class="small" id="userEmailLabel"></span>
+    <button class="secondary" id="btnSignOut" style="padding:3px 10px; font-size:11px;">ログアウト</button>
+  </div>
+  <div class="tabs">
+    <div class="tab active" data-tab="editor">新規研究 / 編集</div>
+    <div class="tab" data-tab="list">保存済み研究</div>
+    <div class="tab" data-tab="settings">設定</div>
+  </div>
+  <div class="panel active" id="panel-editor"></div>
+  <div class="panel" id="panel-list"></div>
+  <div class="panel" id="panel-settings"></div>
+</div>
+
+<script>
+/* =========================================================
+   共通データ層モジュール (サイト1・サイト2の両方で読み込む)
+   Supabaseとのやり取りを全部ここに集約し、呼び出し側(アプリ本体)は
+   「ローカル変数の配列を読み書きする」のと同じ感覚で使えるようにする。
+   ========================================================= */
+
+const SUPABASE_URL = "https://dhramovxeygxjyerbnmi.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRocmFtb3Z4ZXlneGp5ZXJibm1pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA3MzQzNjIsImV4cCI6MjEwNjMxMDM2Mn0.tq5ZOzbz9URdUo2l7_BfYhyIvGO_VmbXAqH6Bm2XscU"; // ビルド時に実際の値へ置換
+
+let _sb = null;
+function getClient() {
+  if (_sb) return _sb;
+  _sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  return _sb;
+}
+/* テスト専用: 擬似クライアントに差し替えられるようキャッシュを破棄する。
+   本番コードからは呼ばない。 */
+function _resetClientForTest() { _sb = null; }
+
+/* ---------- 認証 ---------- */
+async function signInWithGoogle() {
+  const sb = getClient();
+  return sb.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: location.href.split("#")[0].split("?")[0] },
+  });
+}
+async function signOut() {
+  const sb = getClient();
+  return sb.auth.signOut();
+}
+async function getSession() {
+  const sb = getClient();
+  const { data } = await sb.auth.getSession();
+  return data.session;
+}
+function onAuthChange(callback) {
+  const sb = getClient();
+  return sb.auth.onAuthStateChange((_event, session) => callback(session));
+}
+
+/* ---------- プロフィール(プラン・管理者フラグ) ---------- */
+async function getProfile() {
+  const sb = getClient();
+  const { data, error } = await sb.from("profiles").select("plan, ad_free, is_admin").single();
+  if (error) throw error;
+  return data;
+}
+
+/* ---------- エラー分類 ----------
+   SQL側で RAISE EXCEPTION 'GAME_LIMIT_REACHED' のように投げたメッセージを、
+   supabase-jsはerror.message にそのまま載せて返す。 */
+function classifyDbError(error) {
+  if (!error) return null;
+  const msg = (error.message || "") + " " + (error.details || "");
+  if (msg.includes("GAME_LIMIT_REACHED")) return "GAME_LIMIT_REACHED";
+  if (msg.includes("RESEARCH_LIMIT_REACHED")) return "RESEARCH_LIMIT_REACHED";
+  if (msg.includes("RESEARCH_SIZE_LIMIT_REACHED")) return "RESEARCH_SIZE_LIMIT_REACHED";
+  if (error.code === "23505") return "DUPLICATE"; // unique制約違反(同じstart_time)
+  return "UNKNOWN";
+}
+
+/* ---------- games ----------
+   DBの列名(snake_case)と、アプリ内部で使ってるキー(camelCase)の変換をここで吸収する */
+function gameRowToApp(row) {
+  return {
+    id: row.id,
+    startTime: row.start_time,
+    sente: row.sente,
+    gote: row.gote,
+    jikan: row.jikan,
+    moveTokens: row.move_tokens,
+    movesCount: row.moves_count,
+    tktSide: row.tkt_side,
+    result: row.result,
+    kaikei: row.kaikei,
+  };
+}
+function gameAppToRow(g) {
+  return {
+    start_time: g.startTime,
+    sente: g.sente,
+    gote: g.gote,
+    jikan: g.jikan,
+    move_tokens: g.moveTokens,
+    moves_count: g.movesCount,
+    tkt_side: g.tktSide,
+    result: g.result,
+    kaikei: g.kaikei,
+  };
+}
+
+async function listGames() {
+  const sb = getClient();
+  const { data, error } = await sb.from("games").select("*").order("start_time", { ascending: true });
+  if (error) throw error;
+  return data.map(gameRowToApp);
+}
+
+/* 1局登録。成功時は {ok:true, row} / 失敗時は {ok:false, kind, error} を返す(例外は投げない) */
+async function insertGame(gameApp) {
+  const sb = getClient();
+  const { data, error } = await sb.from("games").insert(gameAppToRow(gameApp)).select().single();
+  if (error) return { ok: false, kind: classifyDbError(error), error };
+  return { ok: true, row: gameRowToApp(data) };
+}
+
+async function deleteGame(id) {
+  const sb = getClient();
+  const { error } = await sb.from("games").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/* ---------- notes ---------- */
+async function listNotes() {
+  const sb = getClient();
+  const { data, error } = await sb.from("notes").select("*");
+  if (error) throw error;
+  const out = {};
+  data.forEach(r => { out[r.note_key] = { starred: r.starred, note: r.note, updatedAt: r.updated_at }; });
+  return out;
+}
+async function upsertNote(noteKey, { starred, note }) {
+  const sb = getClient();
+  const { error } = await sb.from("notes").upsert({
+    note_key: noteKey, starred: !!starred, note: note || "", updated_at: new Date().toISOString(),
+  }, { onConflict: "user_id,note_key" });
+  if (error) throw error;
+}
+
+/* 戦型タグの候補用に、サイト1の棋譜に付いている戦型名だけを取得する */
+async function listKaikeiNames() {
+  const sb = getClient();
+  const { data, error } = await sb.from("games").select("kaikei");
+  if (error) throw error;
+  return Array.from(new Set(data.map(r => r.kaikei).filter(k => k && k !== "(未分類)")));
+}
+
+/* ---------- researches(サイト2) ---------- */
+async function listResearches() {
+  const sb = getClient();
+  const { data, error } = await sb.from("researches").select("*").order("updated_at", { ascending: false });
+  if (error) throw error;
+  return data.map(r => Object.assign({ id: r.research_id }, unpackResearch(r.data), { title: r.title }));
+}
+async function upsertResearch(research) {
+  const sb = getClient();
+  if (!research.id) research.id = Date.now();
+  const { error } = await sb.from("researches").upsert({
+    research_id: research.id,
+    title: research.title || "",
+    data: packResearch(research),
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "user_id,research_id" });
+  if (error) return { ok: false, kind: classifyDbError(error), error };
+  return { ok: true };
+}
+async function deleteResearch(researchId) {
+  const sb = getClient();
+  const { error } = await sb.from("researches").delete().eq("research_id", researchId);
+  if (error) throw error;
+}
+
+
+/* ========= ここまで共通データ層モジュール ========= */
+
+/* =========================================================
+   将棋 完全ルールエンジン (rules.js を1ファイルに統合したもの)
+   ========================================================= */
+const PIECE_CODE = {"歩":"P","香":"L","桂":"N","銀":"S","金":"G","角":"B","飛":"R","玉":"K","王":"K",
+  "と":"t","成香":"l","成桂":"n","成銀":"s","馬":"b","龍":"r","竜":"r"};
+const CODE_TO_JP = {P:"歩",L:"香",N:"桂",S:"銀",G:"金",B:"角",R:"飛",K:"玉",t:"と",l:"成香",n:"成桂",s:"成銀",b:"馬",r:"龍"};
+const BASE_OF_PROMOTED = {"と":"歩","成香":"香","成桂":"桂","成銀":"銀","馬":"角","龍":"飛","竜":"飛"};
+const PROMOTED_OF_BASE = {"歩":"と","香":"成香","桂":"成桂","銀":"成銀","角":"馬","飛":"龍"};
+const PROMOTABLE_BASE = new Set(["歩","香","桂","銀","角","飛"]);
+const DROPPABLE_KINDS = ["歩","香","桂","銀","金","角","飛"];
+const ZEN = "１２３４５６７８９"; const KAN = "一二三四五六七八九";
+const FILES = [9,8,7,6,5,4,3,2,1]; const RANKS = ["一","二","三","四","五","六","七","八","九"];
+
+function key(c,r){ return c+","+r; }
+function initialBoard() {
+  const board = {}; const back = ["香","桂","銀","金","玉","金","銀","桂","香"];
+  for (let i=0;i<9;i++) { const col=i+1; board[key(col,1)]=["G",back[i]]; board[key(col,9)]=["S",back[i]]; }
+  board[key(8,2)]=["G","飛"]; board[key(2,2)]=["G","角"]; board[key(2,8)]=["S","飛"]; board[key(8,8)]=["S","角"];
+  for (let col=1; col<=9; col++) { board[key(col,3)]=["G","歩"]; board[key(col,7)]=["S","歩"]; }
+  return board;
+}
+function cloneBoard(board){ const b={}; for (const k in board) b[k]=board[k].slice(); return b; }
+function cloneHands(hands){ return { S: Object.assign({},hands.S), G: Object.assign({},hands.G) }; }
+function forwardDelta(side){ return side==="S" ? -1 : 1; }
+function promotionZoneRows(side){ return side==="S" ? [1,2,3] : [7,8,9]; }
+function farthestRow(side){ return side==="S" ? 1 : 9; }
+function farthestTwoRows(side){ return side==="S" ? [1,2] : [8,9]; }
+function inBounds(c,r){ return c>=1 && c<=9 && r>=1 && r<=9; }
+
+function steppingDeltas(pieceBase, side) {
+  const F = forwardDelta(side);
+  switch (pieceBase) {
+    case "歩": return [[0,F]];
+    case "桂": return [[-1,2*F],[1,2*F]];
+    case "銀": return [[0,F],[-1,F],[1,F],[-1,-F],[1,-F]];
+    case "金": case "と": case "成香": case "成桂": case "成銀": return [[0,F],[-1,F],[1,F],[-1,0],[1,0],[0,-F]];
+    case "玉": case "王": return [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+    default: return null;
+  }
+}
+function slidingDirs(pieceBase) {
+  switch (pieceBase) {
+    case "香": return { forwardOnly:true };
+    case "角": return { dirs: [[1,1],[1,-1],[-1,1],[-1,-1]] };
+    case "飛": return { dirs: [[1,0],[-1,0],[0,1],[0,-1]] };
+    case "馬": return { dirs: [[1,1],[1,-1],[-1,1],[-1,-1]], extraStep: [[1,0],[-1,0],[0,1],[0,-1]] };
+    case "龍": return { dirs: [[1,0],[-1,0],[0,1],[0,-1]], extraStep: [[1,1],[1,-1],[-1,1],[-1,-1]] };
+    default: return null;
+  }
+}
+const SLIDING_PIECES = new Set(["香","角","飛","馬","龍"]);
+
+function pieceTargets(board, col, row, side, pieceBase) {
+  const targets = [];
+  if (SLIDING_PIECES.has(pieceBase)) {
+    const info = slidingDirs(pieceBase);
+    const walk = (dc,dr) => {
+      let c=col+dc, r=row+dr;
+      while (inBounds(c,r)) {
+        const occ = board[key(c,r)];
+        if (!occ) { targets.push([c,r]); } else { if (occ[0] !== side) targets.push([c,r]); break; }
+        c+=dc; r+=dr;
+      }
+    };
+    if (pieceBase === "香") { const F = forwardDelta(side); walk(0,F); }
+    else {
+      info.dirs.forEach(([dc,dr]) => walk(dc,dr));
+      if (info.extraStep) info.extraStep.forEach(([dc,dr]) => {
+        const c=col+dc, r=row+dr; if (!inBounds(c,r)) return;
+        const occ = board[key(c,r)]; if (!occ || occ[0]!==side) targets.push([c,r]);
+      });
+    }
+  } else {
+    steppingDeltas(pieceBase, side).forEach(([dc,dr]) => {
+      const c=col+dc, r=row+dr; if (!inBounds(c,r)) return;
+      const occ = board[key(c,r)]; if (!occ || occ[0]!==side) targets.push([c,r]);
+    });
+  }
+  return targets;
+}
+function findKing(board, side) {
+  for (const k in board) { const [owner,piece]=board[k]; if (owner===side && (piece==="玉"||piece==="王")) return k.split(",").map(Number); }
+  return null;
+}
+function isSquareAttacked(board, col, row, bySide) {
+  for (const k in board) {
+    const [owner, piece] = board[k]; if (owner !== bySide) continue;
+    const [c,r] = k.split(",").map(Number);
+    if (pieceTargets(board, c, r, owner, piece).some(([tc,tr]) => tc===col && tr===row)) return true;
+  }
+  return false;
+}
+function isInCheck(board, side) {
+  const kp = findKing(board, side); if (!kp) return false;
+  return isSquareAttacked(board, kp[0], kp[1], side==="S"?"G":"S");
+}
+function mustPromote(pieceBase, side, toRow) {
+  if (pieceBase==="歩" || pieceBase==="香") return toRow === farthestRow(side);
+  if (pieceBase==="桂") return farthestTwoRows(side).includes(toRow);
+  return false;
+}
+function dropForbiddenSquare(pieceBase, side, toRow) {
+  if (pieceBase==="歩" || pieceBase==="香") return toRow === farthestRow(side);
+  if (pieceBase==="桂") return farthestTwoRows(side).includes(toRow);
+  return false;
+}
+function hasNifu(board, side, col) {
+  for (let r=1;r<=9;r++) { const occ = board[key(col,r)]; if (occ && occ[0]===side && occ[1]==="歩") return true; }
+  return false;
+}
+function generatePseudoLegalMoves(board, hands, side) {
+  const moves = [];
+  for (const k in board) {
+    const [owner, piece] = board[k]; if (owner !== side) continue;
+    const [col,row] = k.split(",").map(Number);
+    const base = BASE_OF_PROMOTED[piece] || piece; const isPromoted = !!BASE_OF_PROMOTED[piece];
+    pieceTargets(board, col, row, side, piece).forEach(([tc,tr]) => {
+      const capture = !!board[key(tc,tr)];
+      const zoneRows = promotionZoneRows(side);
+      const eligible = !isPromoted && PROMOTABLE_BASE.has(base) && (zoneRows.includes(row) || zoneRows.includes(tr));
+      const forced = eligible && mustPromote(base, side, tr);
+      if (eligible && !forced) moves.push({ type:"move", from:[col,row], to:[tc,tr], piece, promote:false, capture });
+      if (eligible) moves.push({ type:"move", from:[col,row], to:[tc,tr], piece, promote:true, capture });
+      if (!eligible) moves.push({ type:"move", from:[col,row], to:[tc,tr], piece, promote:false, capture });
+    });
+  }
+  DROPPABLE_KINDS.forEach(pieceBase => {
+    const count = hands[side][PIECE_CODE[pieceBase]] || 0; if (count <= 0) return;
+    for (let c=1;c<=9;c++) for (let r=1;r<=9;r++) {
+      if (board[key(c,r)]) continue;
+      if (dropForbiddenSquare(pieceBase, side, r)) continue;
+      if (pieceBase==="歩" && hasNifu(board, side, c)) continue;
+      moves.push({ type:"drop", piece:pieceBase, to:[c,r] });
+    }
+  });
+  return moves;
+}
+function applyMoveObj(board, hands, side, mv) {
+  if (mv.type === "drop") {
+    const code = PIECE_CODE[mv.piece];
+    hands[side][code] -= 1; if (hands[side][code] <= 0) delete hands[side][code];
+    board[key(mv.to[0],mv.to[1])] = [side, mv.piece];
+  } else {
+    const fromKey = key(mv.from[0],mv.from[1]); const toKey = key(mv.to[0],mv.to[1]);
+    if (board[toKey]) {
+      const [capOwner, capPiece] = board[toKey];
+      const base = BASE_OF_PROMOTED[capPiece] || capPiece; const code = PIECE_CODE[base];
+      hands[side][code] = (hands[side][code]||0) + 1;
+    }
+    let finalPiece = mv.piece;
+    if (mv.promote) { const base = BASE_OF_PROMOTED[mv.piece] || mv.piece; finalPiece = PROMOTED_OF_BASE[base]; }
+    delete board[fromKey]; board[toKey] = [side, finalPiece];
+  }
+}
+function isUchifuzume(board, hands, side) {
+  const opp = side==="S" ? "G" : "S";
+  if (!isInCheck(board, opp)) return false;
+  return legalMoves(board, hands, opp).length === 0;
+}
+function legalMoves(board, hands, side) {
+  const pseudo = generatePseudoLegalMoves(board, hands, side);
+  const legal = [];
+  for (const mv of pseudo) {
+    const b2 = cloneBoard(board); const h2 = cloneHands(hands);
+    applyMoveObj(b2, h2, side, mv);
+    if (isInCheck(b2, side)) continue;
+    if (mv.type==="drop" && mv.piece==="歩" && isUchifuzume(b2, hands, side)) continue;
+    legal.push(mv);
+  }
+  return legal;
+}
+function isCheckmate(board, hands, side) { return isInCheck(board, side) && legalMoves(board, hands, side).length === 0; }
+function encodeStateCompact(board, hands, turn) {
+  let s = "";
+  for (let r=1;r<=9;r++) for (let c=1;c<=9;c++) {
+    const cell = board[key(c,r)];
+    s += cell ? (cell[0] + PIECE_CODE[cell[1]]) : "..";
+  }
+  const handStr = (h) => Object.keys(h).sort().filter(k=>h[k]).map(k=>k+h[k]).join(",");
+  return s + "|" + handStr(hands.S) + "|" + handStr(hands.G) + "|" + turn;
+}
+/* 局面ハッシュ(encodeStateCompact)から盤面・持ち駒・手番を復元する */
+function decodeStateCompact(h) {
+  const [cells, handS, handG, turn] = h.split("|");
+  const board = {};
+  for (let i = 0; i < 81; i++) {
+    const r = Math.floor(i / 9) + 1, c = (i % 9) + 1;
+    const o = cells[i*2], code = cells[i*2+1];
+    if (o === ".") continue;
+    board[key(c, r)] = [o, CODE_TO_JP[code]];
+  }
+  const parseHand = (str) => {
+    const out = {};
+    if (!str) return out;
+    str.split(",").forEach(t => { if (t) out[t[0]] = parseInt(t.slice(1), 10); });
+    return out;
+  };
+  return { board, hands: { S: parseHand(handS), G: parseHand(handG) }, turn };
+}
+/* 保存用: 各局面の board/hands/turn は局面ハッシュ(ノードのキー)から復元できるので落とす。
+   "_" で始まるキーは画面専用の一時値なので保存しない。 */
+function packResearch(r) {
+  const out = {};
+  for (const k in r) { if (k[0] === "_" || k === "nodes") continue; out[k] = r[k]; }
+  out.nodes = {};
+  for (const h in r.nodes) {
+    const n = r.nodes[h];
+    out.nodes[h] = { edges: n.edges, note: n.note || "" };
+  }
+  return out;
+}
+function unpackResearch(data) {
+  const r = Object.assign({}, data);
+  r.nodes = {};
+  for (const h in data.nodes) {
+    const n = data.nodes[h];
+    if (n.board) { r.nodes[h] = n; continue; } // 旧形式(盤面つき)もそのまま読める
+    const st = decodeStateCompact(h);
+    r.nodes[h] = { board: st.board, hands: st.hands, turn: st.turn, edges: n.edges || {}, note: n.note || "" };
+  }
+  return r;
+}
+function countNodes(r) { return Object.keys(r.nodes).length; }
+
+function moveToNotation(mv) {
+  const [tc,tr] = mv.to;
+  const pieceName = mv.piece;
+  let s = ZEN[tc-1] + KAN[tr-1] + pieceName;
+  if (mv.type === "drop") return s + "打";
+  if (mv.promote) s += "成";
+  return s + "(" + mv.from[0] + mv.from[1] + ")";
+}
+
+/* =========================================================
+   アプリ本体
+   ========================================================= */
+const LS_RESEARCHES = "kenkyu_researches_v1";
+const LS_HANDOFF = "shogi_handoff"; // サイト1から渡される局面
+
+/* 研究データはDBが正。RESEARCHES_CACHEはログイン時にDBから読み込んだ写しで、
+   既存の多数の呼び出し箇所(同期関数)を壊さないよう、読み出しは同期のまま提供する。
+   書き込み(saveResearches)は非同期でDBに反映し、呼び出し元が結果を見たい場合は
+   返り値のPromiseをawaitすれば {limitHit:true/false} を受け取れる。 */
+let RESEARCHES_CACHE = [];
+let RESEARCH_SNAP = {}; // id -> 最後にDBへ保存した内容(JSON文字列)。変更のあった研究だけを書き込むために使う
+function snapOf(r) { return JSON.stringify(packResearch(r)); }
+function snapshotAll() { RESEARCH_SNAP = {}; RESEARCHES_CACHE.forEach(r => { RESEARCH_SNAP[r.id] = snapOf(r); }); }
+function loadResearches() { return RESEARCHES_CACHE; }
+async function saveResearches(list) {
+  const newIds = new Set(list.map(r => r.id));
+  const removed = RESEARCHES_CACHE.filter(r => !newIds.has(r.id));
+  for (const r of removed) {
+    try { await deleteResearch(r.id); delete RESEARCH_SNAP[r.id]; } catch (e) { /* 削除失敗は致命的でないため握りつぶす */ }
+  }
+  let limitHit = false, sizeHit = false;
+  const successList = [];
+  for (const r of list) {
+    const wasSaved = RESEARCH_SNAP[r.id] !== undefined;
+    const snap = snapOf(r);
+    if (wasSaved && RESEARCH_SNAP[r.id] === snap) { successList.push(r); continue; } // 変更なし
+    const res = await upsertResearch(r);
+    if (res && !res.ok) {
+      if (res.kind === "RESEARCH_LIMIT_REACHED") limitHit = true;
+      else if (res.kind === "RESEARCH_SIZE_LIMIT_REACHED") sizeHit = true;
+      else alert("研究の保存に失敗した: " + (res.error && res.error.message));
+      if (wasSaved) successList.push(r); // 既に保存済みの研究は、更新に失敗しても一覧から消さない
+      continue;
+    }
+    RESEARCH_SNAP[r.id] = snap;
+    successList.push(r);
+  }
+  RESEARCHES_CACHE = successList;
+  return { limitHit, sizeHit };
+}
+
+let CURRENT = null; // 編集中の研究データ { id, title, createdAt, sourceNote, root, nodes }
+let PATH = []; // [{mv, hash}] ルートからの現在地
+let SELECTED = null; // {type:'board', from:[c,r]} | {type:'hand', piece}
+
+/* 研究データ: side = 自分が指す側("S"=先手側 / "G"=後手側 / null=未設定)、tags = 戦型タグ(複数)、
+   rootPly = 開始局面が初期局面から何手目か(不明ならnull) */
+let TAG_HINTS_EXTRA = [];
+async function loadTagHints() { try { TAG_HINTS_EXTRA = await listKaikeiNames(); } catch (e) { TAG_HINTS_EXTRA = []; } }
+function allTagHints() {
+  const set = new Set(TAG_HINTS_EXTRA); // 標準タグは持たない。自分の棋譜の戦型名と、自分が研究に付けたタグだけ
+  RESEARCHES_CACHE.forEach(r => (r.tags || []).forEach(t => set.add(t)));
+  return Array.from(set);
+}
+
+/* 入力中の文字に一致する候補だけを返す(空入力・追加済みのタグは出さない) */
+function tagSuggestions(query, tags) {
+  const q = (query || "").trim().toLowerCase(); if (!q) return [];
+  return allTagHints().filter(h => !(tags || []).includes(h) && h.toLowerCase().includes(q)).slice(0, 8);
+}
+function flushTagInput() { // 入力欄に残っている文字があれば、タグとして追加する
+  const inp = document.getElementById("tagInput"); if (!inp || !CURRENT) return;
+  const v = (inp.value || "").trim(); if (!v) return;
+  CURRENT.tags = CURRENT.tags || []; if (!CURRENT.tags.includes(v)) CURRENT.tags.push(v); inp.value = "";
+}
+
+function newEmptyResearch(sourceNote, side) {
+  const board = initialBoard();
+  const hands = { S:{}, G:{} };
+  const rootHash = encodeStateCompact(board, hands, "S");
+  return {
+    id: null,
+    title: "",
+    side: side || null,
+    tags: [],
+    createdAt: new Date().toISOString(),
+    sourceNote: sourceNote || "新規(初期局面)",
+    rootPly: 0,
+    root: rootHash,
+    nodes: { [rootHash]: { board, hands, turn:"S", edges:{}, note:"" } },
+  };
+}
+
+function newResearchFromPosition(board, hands, turn, sourceNote, ply, side) {
+  const rootHash = encodeStateCompact(board, hands, turn);
+  return {
+    id: null, title: "", side: side || null, tags: [],
+    createdAt: new Date().toISOString(), sourceNote: sourceNote || "局面から開始",
+    rootPly: (ply === null) ? null : (ply || 0),
+    root: rootHash, nodes: { [rootHash]: { board, hands, turn, edges:{}, note:"" } },
+  };
+}
+
+function currentNode() {
+  const hash = PATH.length ? PATH[PATH.length-1].hash : CURRENT.root;
+  return CURRENT.nodes[hash];
+}
+function currentHash() { return PATH.length ? PATH[PATH.length-1].hash : CURRENT.root; }
+
+function playMove(mv) {
+  const node = currentNode();
+  const b2 = cloneBoard(node.board); const h2 = cloneHands(node.hands);
+  applyMoveObj(b2, h2, node.turn, mv);
+  const nextTurn = node.turn === "S" ? "G" : "S";
+  const newHash = encodeStateCompact(b2, h2, nextTurn);
+  if (!CURRENT.nodes[newHash]) {
+    CURRENT.nodes[newHash] = { board: b2, hands: h2, turn: nextTurn, edges:{}, note:"" };
+  }
+  const mvKey = JSON.stringify(mv);
+  node.edges[mvKey] = { mv, to: newHash };
+  PATH.push({ mv, hash: newHash });
+  SELECTED = null;
+}
+
+/* ---------- 盤面レンダリング(タップ操作つき) ---------- */
+/* 盤を反転して表示するか。後手側の研究は自分側が下に来るよう既定で反転し、ボタンで切り替えられる */
+function viewFlipped() {
+  if (CURRENT && CURRENT._flip !== undefined && CURRENT._flip !== null) return CURRENT._flip;
+  return !!(CURRENT && CURRENT.side === "G");
+}
+function renderBoardHTML(node) {
+  const flip = viewFlipped();
+  const bottomSide = flip ? "G" : "S", topSide = flip ? "S" : "G";
+  const sideName = (sd) => sd === "S" ? "先手" : "後手";
+  const renderHand = (side) => {
+    const h = node.hands[side] || {};
+    const order = ["R","B","G","S","N","L","P"];
+    const isMyTurn = side === node.turn;
+    let html = "";
+    order.forEach(code => {
+      const n = h[code]; if (!n) return;
+      const pieceName = CODE_TO_JP[code];
+      const isSel = SELECTED && SELECTED.type==="hand" && SELECTED.piece===pieceName && SELECTED.side===side;
+      const cls = "hand-piece" + (isSel?" selected":"") + (!isMyTurn?" disabled":"");
+      html += `<span class="${cls}" data-hand="${pieceName}" data-side="${side}">${pieceName}${n>1?"×"+n:""}</span>`;
+    });
+    return html || `<span class="small">なし</span>`;
+  };
+  const files = flip ? FILES.slice().reverse() : FILES;
+  let html = `<div id="boardWrap" style="display:inline-block; position:relative;">`;
+  html += `<div class="small" style="margin-bottom:4px;">${sideName(topSide)} 持駒: ${renderHand(topSide)}</div>`;
+  html += `<table class="board-table"><tr>`;
+  files.forEach(f => html += `<td class="label">${f}</td>`);
+  html += `<td class="label"></td></tr>`;
+  const legal = legalMoves(node.board, node.hands, node.turn);
+  let targetSquares = [];
+  if (SELECTED) {
+    if (SELECTED.type === "board") {
+      targetSquares = legal.filter(m => m.type==="move" && m.from[0]===SELECTED.from[0] && m.from[1]===SELECTED.from[1]);
+    } else {
+      targetSquares = legal.filter(m => m.type==="drop" && m.piece===SELECTED.piece);
+    }
+  }
+  for (let ri=0; ri<9; ri++) {
+    const row = flip ? 9-ri : ri+1;
+    html += `<tr>`;
+    files.forEach(col => {
+      const cell = node.board[key(col,row)];
+      const isSelectedSq = SELECTED && SELECTED.type==="board" && SELECTED.from[0]===col && SELECTED.from[1]===row;
+      const isTarget = targetSquares.some(m => m.to[0]===col && m.to[1]===row);
+      let cls = "";
+      if (isSelectedSq) cls += " selected";
+      if (isTarget) cls += " target";
+      const clickable = (cell && cell[0]===node.turn) || isTarget;
+      if (clickable) cls += " clickable";
+      let content = "";
+      if (cell) {
+        const [owner, piece] = cell;
+        const far = owner === topSide; // 向こう側の駒は逆向きに表示する
+        const classes = [owner==="G" ? "p-gote" : "", far ? "p-far" : ""].filter(Boolean).join(" ");
+        content = classes ? `<span class="${classes}">${piece}</span>` : piece;
+      }
+      html += `<td class="${cls.trim()}" data-col="${col}" data-row="${row}">${content}</td>`;
+    });
+    html += `<td class="label">${RANKS[row-1]}</td></tr>`;
+  }
+  html += `</table>`;
+  html += `<div class="small" style="margin-top:4px;">${sideName(bottomSide)} 持駒: ${renderHand(bottomSide)}</div>`;
+  html += `<svg id="engArrows" style="position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; overflow:visible;"></svg>`;
+  html += `</div>`;
+  return html;
+}
+
+function onBoardCellClick(col, row) {
+  const node = currentNode();
+  const legal = legalMoves(node.board, node.hands, node.turn);
+  // 選択中で、かつここがターゲットなら着手
+  if (SELECTED) {
+    let candidates = [];
+    if (SELECTED.type === "board") {
+      candidates = legal.filter(m => m.type==="move" && m.from[0]===SELECTED.from[0] && m.from[1]===SELECTED.from[1] && m.to[0]===col && m.to[1]===row);
+    } else {
+      candidates = legal.filter(m => m.type==="drop" && m.piece===SELECTED.piece && m.to[0]===col && m.to[1]===row);
+    }
+    if (candidates.length === 1) { playMove(candidates[0]); renderEditorTab(); return; }
+    if (candidates.length === 2) {
+      const doPromote = confirm("成りますか？(OK=成る / キャンセル=成らない)");
+      const chosen = candidates.find(m => m.promote === doPromote) || candidates[0];
+      playMove(chosen); renderEditorTab(); return;
+    }
+  }
+  // 新規選択
+  const cell = node.board[key(col,row)];
+  if (cell && cell[0] === node.turn) { SELECTED = { type:"board", from:[col,row] }; }
+  else { SELECTED = null; }
+  renderEditorTab();
+}
+function onHandClick(piece, side) {
+  const node = currentNode();
+  if (side !== node.turn) return;
+  SELECTED = { type:"hand", piece, side };
+  renderEditorTab();
+}
+
+/* ---------- タブ: 新規研究/編集 ---------- */
+function findMatchingResearches(rootHash) {
+  return loadResearches().filter(r => r.root === rootHash);
+}
+
+/* ---------- 研究どうしの統合 ---------- */
+/* 統合を自動で確認する条件(いずれか):
+   (1) 共通する局面のうち、初期局面から数えて N手目以上のものがある(Nは設定で変更。既定35)
+   (2) 片方の研究が、もう片方に丸ごと含まれている(含まれる側が CONTAIN_MIN_STEPS 手以上の長さの時だけ)
+   (3) 手数が不明の研究どうしで、開始局面以外に共通局面がある
+   先手側/後手側が両方設定されていて違う研究どうしは、確認しない。 */
+const MERGE_MIN_PLY_DEFAULT = 35;
+const LS_MERGE_MIN_PLY = "kenkyu_merge_min_ply";
+const CONTAIN_MIN_STEPS = 10;
+function mergeMinPly() {
+  try {
+    const v = parseInt(localStorage.getItem(LS_MERGE_MIN_PLY), 10);
+    if (v >= 1 && v <= 300) return v;
+  } catch (e) {}
+  return MERGE_MIN_PLY_DEFAULT;
+}
+function setMergeMinPly(n) {
+  try { localStorage.setItem(LS_MERGE_MIN_PLY, String(n)); } catch (e) {}
+}
+
+function reachableCount(nodes, root) {
+  const seen = new Set([root]); const queue = [root];
+  while (queue.length) {
+    const h = queue.shift(); const n = nodes[h]; if (!n) continue;
+    Object.values(n.edges).forEach(e => { if (nodes[e.to] && !seen.has(e.to)) { seen.add(e.to); queue.push(e.to); } });
+  }
+  return seen.size;
+}
+
+/* 各局面が初期局面から何手目か(ルートからの最短手数 + 開始局面の手数) */
+function nodeDepths(research) {
+  const depth = { [research.root]: research.rootPly || 0 };
+  const queue = [research.root];
+  while (queue.length) {
+    const h = queue.shift(); const n = research.nodes[h]; if (!n) continue;
+    Object.values(n.edges).forEach(e => {
+      if (research.nodes[e.to] && depth[e.to] === undefined) { depth[e.to] = depth[h] + 1; queue.push(e.to); }
+    });
+  }
+  return depth;
+}
+
+/* 開始局面からの最大手数(開始局面の手数は含めない) */
+function maxSteps(research) {
+  const depth = { [research.root]: 0 }; const queue = [research.root]; let mx = 0;
+  while (queue.length) {
+    const h = queue.shift(); const n = research.nodes[h]; if (!n) continue;
+    Object.values(n.edges).forEach(e => {
+      if (research.nodes[e.to] && depth[e.to] === undefined) { depth[e.to] = depth[h] + 1; if (depth[e.to] > mx) mx = depth[e.to]; queue.push(e.to); }
+    });
+  }
+  return mx;
+}
+/* a の局面すべてが b にも含まれるか */
+function isContainedIn(a, b) {
+  for (const h in a.nodes) if (!b.nodes[h]) return false;
+  return true;
+}
+
+/* 2つの研究の重なり具合。
+   共通局面の数 / 最も深い共通局面の手数(初期局面から。手数が確かな方の研究から求める) /
+   手数を決められない共通局面の数(両方とも手数不明で、どちらの開始局面でもないもの) */
+function analyzeOverlap(a, b) {
+  const da = nodeDepths(a), db = nodeDepths(b);
+  const ka = a.rootPly !== null && a.rootPly !== undefined, kb = b.rootPly !== null && b.rootPly !== undefined;
+  let shared = 0, deepest = -1, deepHash = null, unknownShared = 0;
+  for (const h in a.nodes) {
+    if (!b.nodes[h]) continue;
+    shared++;
+    let d = null;
+    if (ka && kb) d = Math.min(da[h], db[h]);
+    else if (ka) d = da[h];
+    else if (kb) d = db[h];
+    if (d === null || d === undefined || isNaN(d)) {
+      if (h !== a.root && h !== b.root) unknownShared++;
+      continue;
+    }
+    if (d > deepest) { deepest = d; deepHash = h; }
+  }
+  return { shared, deepest, deepHash, unknownShared };
+}
+
+/* target に source を足した統合結果を返す。ルートから全局面に辿れない場合は null */
+function mergeResearches(target, source) {
+  const nodes = {};
+  const cloneNode = (n) => ({ board: n.board, hands: n.hands, turn: n.turn, edges: Object.assign({}, n.edges), note: n.note || "" });
+  for (const h in target.nodes) nodes[h] = cloneNode(target.nodes[h]);
+  for (const h in source.nodes) {
+    const sn = source.nodes[h];
+    if (!nodes[h]) { nodes[h] = cloneNode(sn); continue; }
+    const tn = nodes[h];
+    for (const ek in sn.edges) if (!tn.edges[ek]) tn.edges[ek] = sn.edges[ek];
+    if (sn.note && tn.note && sn.note !== tn.note) tn.note = tn.note + "\n---\n" + sn.note;
+    else if (sn.note && !tn.note) tn.note = sn.note;
+  }
+  const total = Object.keys(nodes).length;
+  let root = null, rootPly = 0;
+  for (const cand of [{ r: target.root, p: target.rootPly }, { r: source.root, p: source.rootPly }]) {
+    if (nodes[cand.r] && reachableCount(nodes, cand.r) === total) { root = cand.r; rootPly = cand.p || 0; break; }
+  }
+  if (!root) return null;
+  let sourceNote = target.sourceNote;
+  if (source.sourceNote && source.sourceNote !== target.sourceNote) sourceNote = target.sourceNote + " / " + source.sourceNote;
+  const declined = Array.from(new Set([...(target.mergeDeclined || []), ...(source.mergeDeclined || [])]))
+    .filter(id => id !== target.id && id !== source.id);
+  const tags = Array.from(new Set([...(target.tags || []), ...(source.tags || [])]));
+  return {
+    id: target.id, title: target.title || source.title, createdAt: target.createdAt,
+    side: target.side || source.side || null, tags,
+    sourceNote, rootPly, root, nodes, mergeDeclined: declined,
+  };
+}
+
+/* cur と重なっている保存済み研究を、深い順に返す。reason は確認ダイアログに出す理由 */
+function findMergeCandidates(cur, list) {
+  const out = [];
+  const minPly = mergeMinPly();
+  list.forEach(r => {
+    if (cur.id && r.id === cur.id) return;
+    if ((cur.mergeDeclined || []).includes(r.id)) return;
+    if (cur.id && (r.mergeDeclined || []).includes(cur.id)) return;
+    if (cur.side && r.side && cur.side !== r.side) return; // 先手側と後手側の研究は統合を勧めない
+    const ov = analyzeOverlap(cur, r);
+    let reason = null;
+    if (ov.deepest >= minPly) reason = `${minPly}手目以降の共通局面あり(最も深い共通局面は${ov.deepest}手目)`;
+    else if (ov.unknownShared > 0) reason = `手数が分からない研究どうしで、開始局面以外にも共通局面がある(${ov.unknownShared}個)`;
+    else if (isContainedIn(r, cur) && maxSteps(r) >= CONTAIN_MIN_STEPS) reason = `「${r.title || "(無題)"}」の局面はすべて、この研究に含まれている`;
+    else if (isContainedIn(cur, r) && maxSteps(cur) >= CONTAIN_MIN_STEPS) reason = `この研究の局面はすべて、「${r.title || "(無題)"}」に含まれている`;
+    if (!reason) return;
+    const merged = mergeResearches(r, cur);
+    if (!merged) return;
+    out.push({ research: r, shared: ov.shared, deepest: ov.deepest, deepHash: ov.deepHash, reason, merged });
+  });
+  out.sort((a, b) => (b.deepest - a.deepest) || (b.shared - a.shared));
+  return out;
+}
+
+/* research のルートから targetHash までの経路を PATH 形式で返す */
+function findPathTo(research, targetHash) {
+  if (targetHash === research.root) return [];
+  const prev = { [research.root]: null }; const queue = [research.root];
+  while (queue.length) {
+    const h = queue.shift(); const n = research.nodes[h]; if (!n) continue;
+    for (const e of Object.values(n.edges)) {
+      if (prev[e.to] !== undefined || !research.nodes[e.to]) continue;
+      prev[e.to] = { from: h, mv: e.mv }; queue.push(e.to);
+      if (e.to === targetHash) {
+        const path = []; let cur = targetHash;
+        while (prev[cur]) { path.unshift({ mv: prev[cur].mv, hash: cur }); cur = prev[cur].from; }
+        return path;
+      }
+    }
+  }
+  return null;
+}
+
+/* 確認ダイアログ用: 共通局面までの手順(直近8手まで、▲先手 △後手つき) */
+function sharedLineText(research, hash) {
+  const path = findPathTo(research, hash);
+  if (!path) return "";
+  if (path.length === 0) return "(この研究の開始局面そのもの)";
+  const marks = path.map((p, i) => {
+    const fromHash = i === 0 ? research.root : path[i-1].hash;
+    const turn = research.nodes[fromHash].turn;
+    return (turn === "S" ? "▲" : "△") + moveToNotation(p.mv);
+  });
+  return (marks.length > 8 ? "… " : "") + marks.slice(-8).join(" ");
+}
+
+function renderTagArea() {
+  const area = document.getElementById("tagArea"); if (!area) return;
+  const tags = CURRENT.tags || (CURRENT.tags = []);
+  let html = `<span class="small">戦型タグ:</span> `;
+  tags.forEach((t, i) => { html += `<span class="chip">${t}<span class="x" data-rmtag="${i}">×</span></span>`; });
+  html += `<input type="text" id="tagInput" autocomplete="off" placeholder="タグを追加(Enterか追加ボタン)" style="width:200px;"> <button type="button" class="secondary" id="tagAddBtn" style="padding:3px 10px; font-size:11px;">追加</button>
+    <div id="tagSuggest" style="min-height:0;"></div>`;
+  area.innerHTML = html;
+  const addTag = (v) => {
+    v = (v || "").trim();
+    if (v && !tags.includes(v)) { tags.push(v); }
+    renderTagArea(); const i2 = document.getElementById("tagInput"); if (i2) i2.focus();
+  };
+  const inp = document.getElementById("tagInput");
+  const showSuggest = () => {
+    const box = document.getElementById("tagSuggest"); if (!box) return;
+    const m = tagSuggestions(inp.value, tags);
+    box.innerHTML = m.map((h, i) => `<span class="chip" data-sg="${i}" style="cursor:pointer;">${h}</span>`).join("");
+    box.querySelectorAll("[data-sg]").forEach(c => { c.onclick = () => addTag(m[parseInt(c.dataset.sg, 10)]); });
+  };
+  inp.oninput = showSuggest; // 文字を入力している間だけ候補を出す(入力欄を選んだだけ・追加した直後は出さない)
+  inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); addTag(inp.value); } };
+  document.getElementById("tagAddBtn").onclick = () => addTag(inp.value);
+  area.querySelectorAll("[data-rmtag]").forEach(x => { x.onclick = () => { tags.splice(parseInt(x.dataset.rmtag, 10), 1); renderTagArea(); }; });
+}
+
+
+/* =========================================================
+   局面編集(標準版): 任意の局面を作って、そこから研究を始める
+   ========================================================= */
+let EDIT = null; // 局面編集中の状態。null なら通常の画面
+const PIECE_LIMITS = { "歩":18, "香":4, "桂":4, "銀":4, "金":4, "角":2, "飛":2, "玉":2 };
+const EDIT_PALETTE = ["歩","香","桂","銀","金","角","飛","玉","と","成香","成桂","成銀","馬","龍"];
+const HAND_ORDER = ["R","B","G","S","N","L","P"];
+/* 駒落ちは上手(後手側)の駒を落とし、上手(後手側)が先に指す。remove は落とす駒のマス(後手の初期配置) */
+const EDIT_TEMPLATES = [
+  { id:"hirate", name:"平手", remove:[], turn:"S" },
+  { id:"empty", name:"空盤", empty:true, remove:[], turn:"S" },
+  { id:"kyo", name:"香落ち", remove:[[1,1]], turn:"G" },
+  { id:"rkyo", name:"右香落ち", remove:[[9,1]], turn:"G" },
+  { id:"kaku", name:"角落ち", remove:[[2,2]], turn:"G" },
+  { id:"hisha", name:"飛車落ち", remove:[[8,2]], turn:"G" },
+  { id:"2mai", name:"二枚落ち", remove:[[2,2],[8,2]], turn:"G" },
+  { id:"4mai", name:"四枚落ち", remove:[[2,2],[8,2],[1,1],[9,1]], turn:"G" },
+  { id:"6mai", name:"六枚落ち", remove:[[2,2],[8,2],[1,1],[9,1],[2,1],[8,1]], turn:"G" },
+];
+
+function newEditState(templateId) {
+  const t = EDIT_TEMPLATES.find(x => x.id === templateId) || EDIT_TEMPLATES[0];
+  const board = t.empty ? {} : initialBoard();
+  t.remove.forEach(([c, r]) => { delete board[key(c, r)]; });
+  return { tmpl: t.id, tmplName: t.name, board, hands: { S:{}, G:{} }, turn: t.turn, side: null, sel: null, lastOwner: "S", lastTap: null, flip: null, dirty: false };
+}
+
+/* 局面の整合性チェック。errors は保存(開始)を止めるもの、warnings は注意するだけのもの */
+function validatePosition(board, hands, turn) {
+  const errors = [], warnings = [];
+  const sideName = (sd) => sd === "S" ? "先手" : "後手";
+  const sqName = (c, r) => ZEN[c-1] + KAN[r-1];
+  const kings = { S:0, G:0 };
+  const tally = {};
+  for (const k in board) {
+    const [owner, piece] = board[k];
+    const base = BASE_OF_PROMOTED[piece] || (piece === "王" ? "玉" : piece);
+    tally[base] = (tally[base] || 0) + 1;
+    if (base === "玉") kings[owner]++;
+  }
+  for (const sd of ["S","G"]) {
+    if (kings[sd] !== 1) errors.push(`${sideName(sd)}の玉が${kings[sd]}枚ある(1枚にしてほしい)`);
+  }
+  for (const sd of ["S","G"]) {
+    for (let c = 1; c <= 9; c++) {
+      let n = 0;
+      for (let r = 1; r <= 9; r++) { const cell = board[key(c, r)]; if (cell && cell[0] === sd && cell[1] === "歩") n++; }
+      if (n >= 2) errors.push(`${sideName(sd)}の${c}筋に歩が${n}枚ある(二歩)`);
+    }
+  }
+  for (const k in board) {
+    const [owner, piece] = board[k];
+    const [c, r] = k.split(",").map(Number);
+    if ((piece === "歩" || piece === "香") && r === farthestRow(owner)) errors.push(`${sqName(c, r)}の${sideName(owner)}の${piece}は行き場がない`);
+    if (piece === "桂" && farthestTwoRows(owner).includes(r)) errors.push(`${sqName(c, r)}の${sideName(owner)}の桂は行き場がない`);
+  }
+  for (const sd of ["S","G"]) for (const code in hands[sd]) {
+    const base = CODE_TO_JP[code];
+    tally[base] = (tally[base] || 0) + hands[sd][code];
+  }
+  for (const base in PIECE_LIMITS) {
+    if ((tally[base] || 0) > PIECE_LIMITS[base]) warnings.push(`${base}が合計${tally[base]}枚ある(通常は${PIECE_LIMITS[base]}枚まで)`);
+  }
+  if (kings.S === 1 && kings.G === 1) {
+    const opp = turn === "S" ? "G" : "S";
+    if (isInCheck(board, opp)) warnings.push(`手番でない${sideName(opp)}の玉に王手がかかっている(通常はありえない局面)`);
+    else if (isCheckmate(board, hands, turn)) warnings.push(`${sideName(turn)}番は詰んでいる局面`);
+  }
+  return { errors, warnings };
+}
+
+/* ---- 駒箱・駒台方式: 盤・駒台・駒箱の間で駒を動かす。駒の総数は40枚で固定(駒箱 = 総数 − 盤上 − 駒台) ---- */
+const BOX_ORDER = ["飛","角","金","銀","桂","香","歩","玉"];
+const BOX_PIECES = BOX_ORDER;
+let editNow = () => Date.now();
+const EDIT_DBL_MS = 350;
+const baseOf = (pc) => BASE_OF_PROMOTED[pc] || (pc === "王" ? "玉" : pc);
+const kingName = (owner) => owner === "G" ? "王" : "玉"; // 表示の慣習: 後手は王、先手は玉
+function boxCounts(E) {
+  const used = {};
+  for (const k in E.board) { const b = baseOf(E.board[k][1]); used[b] = (used[b] || 0) + 1; }
+  for (const sd of ["S","G"]) for (const code in E.hands[sd]) { const b = CODE_TO_JP[code]; used[b] = (used[b] || 0) + E.hands[sd][code]; }
+  const out = {};
+  BOX_PIECES.forEach(b => { out[b] = Math.max(0, PIECE_LIMITS[b] - (used[b] || 0)); });
+  return out;
+}
+function handAdd(E, side, code, d) {
+  const n = Math.max(0, (E.hands[side][code] || 0) + d);
+  if (n === 0) delete E.hands[side][code]; else E.hands[side][code] = n;
+}
+function editSelectBox(piece) {
+  const E = EDIT; E.lastTap = null;
+  if (E.sel && E.sel.from === "box" && E.sel.piece === piece) { E.sel = null; return; }
+  if (boxCounts(E)[piece] <= 0) return;
+  E.sel = { from: "box", piece, owner: E.lastOwner || "S" };
+}
+function editSelectHand(side, code) {
+  const E = EDIT; E.lastTap = null;
+  if (E.sel && E.sel.from === "hand" && E.sel.side === side && E.sel.code === code) { E.sel = null; return; }
+  if (!(E.hands[side][code] > 0)) return;
+  E.sel = { from: "hand", side, code };
+}
+/* 盤の駒を2回素早くタップ: 歩→と→(反対の)歩→(反対の)と→歩… 成れない駒(金・玉)は先後だけが切り替わる */
+function editCycle(col, row) {
+  const E = EDIT, k = key(col, row), cell = E.board[k]; if (!cell) return;
+  const [o, p] = cell, base = baseOf(p), opp = o === "S" ? "G" : "S";
+  if (!PROMOTABLE_BASE.has(base)) E.board[k] = [opp, base === "玉" ? kingName(opp) : base];
+  else if (!BASE_OF_PROMOTED[p]) E.board[k] = [o, PROMOTED_OF_BASE[base]];
+  else E.board[k] = [opp, base];
+  E.dirty = true;
+}
+function editTapCell(col, row) {
+  const E = EDIT, k = key(col, row), sel = E.sel, now = editNow();
+  const sameBoard = sel && sel.from === "board" && sel.col === col && sel.row === row;
+  const quick = E.lastTap && E.lastTap.k === k && now - E.lastTap.t < EDIT_DBL_MS;
+  if (quick && E.board[k] && (!sel || sameBoard)) { editCycle(col, row); E.sel = { from: "board", col, row }; E.lastTap = null; return; }
+  if (!sel) { if (E.board[k]) { E.sel = { from: "board", col, row }; E.lastTap = { k, t: now }; } return; }
+  if (sel.from === "board") {
+    if (sameBoard) { E.sel = null; E.lastTap = { k, t: now }; return; }
+    const sk = key(sel.col, sel.row), moving = E.board[sk], captured = E.board[k];
+    E.board[k] = moving; delete E.board[sk];
+    if (captured) { const b = baseOf(captured[1]); if (b !== "玉") handAdd(E, moving[0], PIECE_CODE[b], 1); } // 取った駒は、動かした側の駒台へ(玉は駒箱へ)
+    E.dirty = true; E.sel = null; E.lastTap = null; return;
+  }
+  E.lastTap = null;
+  if (sel.from === "hand") {
+    const base = CODE_TO_JP[sel.code];
+    E.board[k] = [sel.side, base]; handAdd(E, sel.side, sel.code, -1); E.dirty = true;
+    if (!(E.hands[sel.side][sel.code] > 0)) E.sel = null;
+    return;
+  }
+  // 駒箱から置く(置き先に駒があれば、その駒は駒箱へ戻る)
+  delete E.board[k];
+  if (boxCounts(E)[sel.piece] <= 0) { E.sel = null; return; }
+  E.board[k] = [sel.owner, sel.piece === "玉" ? kingName(sel.owner) : sel.piece]; E.dirty = true; E.lastOwner = sel.owner;
+  if (boxCounts(E)[sel.piece] <= 0) E.sel = null; // 続けて置けるように、残りがある間は選択したまま
+}
+/* 選択中の駒を、駒箱("box")か、駒台("S"/"G")へ移す */
+function editDropTo(zone) {
+  const E = EDIT, sel = E.sel; if (!sel) return;
+  E.lastTap = null;
+  if (zone === "box") {
+    if (sel.from === "board") { delete E.board[key(sel.col, sel.row)]; E.dirty = true; }
+    else if (sel.from === "hand") { handAdd(E, sel.side, sel.code, -1); E.dirty = true; }
+    E.sel = null; return;
+  }
+  if (sel.from === "board") {
+    const cell = E.board[key(sel.col, sel.row)]; if (!cell) { E.sel = null; return; }
+    const b = baseOf(cell[1]); if (b === "玉") return; // 玉は駒台に置けない
+    delete E.board[key(sel.col, sel.row)]; handAdd(E, zone, PIECE_CODE[b], 1); E.dirty = true; E.sel = null; return;
+  }
+  if (sel.from === "box") {
+    if (sel.piece === "玉") return;
+    if (boxCounts(E)[sel.piece] <= 0) { E.sel = null; return; }
+    handAdd(E, zone, PIECE_CODE[sel.piece], 1); E.dirty = true;
+    if (boxCounts(E)[sel.piece] <= 0) E.sel = null;
+    return;
+  }
+  if (sel.side === zone) { E.sel = null; return; }
+  handAdd(E, sel.side, sel.code, -1); handAdd(E, zone, sel.code, 1); E.dirty = true; E.sel = null;
+}
+function editTapBoxChip(piece) {
+  const sel = EDIT.sel;
+  if (sel && (sel.from === "board" || sel.from === "hand")) editDropTo("box"); else editSelectBox(piece);
+}
+function editTapHandChip(side, code) {
+  const sel = EDIT.sel;
+  if (sel && (sel.from === "board" || sel.from === "box" || (sel.from === "hand" && sel.side !== side))) editDropTo(side);
+  else editSelectHand(side, code);
+}
+function editTapZone(zone) { if (EDIT.sel) editDropTo(zone); }
+function editStartResearch() {
+  const E = EDIT;
+  if (!E.side) return { ok: false, message: "自分が先手側か後手側かを選んでほしい。" };
+  const v = validatePosition(E.board, E.hands, E.turn);
+  if (v.errors.length) return { ok: false, message: v.errors[0] };
+  const hash = encodeStateCompact(E.board, E.hands, E.turn);
+  const initHash = encodeStateCompact(initialBoard(), { S:{}, G:{} }, "S");
+  // 手数が確かなのは「ひな形のまま」か平手の初期局面と同じ時だけ。編集した局面は手数不明(null)
+  const rootPly = (!E.dirty || hash === initHash) ? 0 : null;
+  const note = `局面編集(${E.tmplName}${E.dirty ? "・編集あり" : ""})`;
+  CURRENT = newResearchFromPosition(cloneBoard(E.board), cloneHands(E.hands), E.turn, note, rootPly, E.side);
+  EDIT = null; PATH = []; SELECTED = null;
+  return { ok: true };
+}
+
+function renderPositionEditor() {
+  const E = EDIT;
+  const el = document.getElementById("panel-editor");
+  const flip = (E.flip === null || E.flip === undefined) ? E.side === "G" : E.flip; // 未指定なら、後手側のとき反転
+  const files = flip ? FILES.slice().reverse() : FILES;
+  const v = validatePosition(E.board, E.hands, E.turn);
+  let html = `<div class="card"><div style="font-weight:800; margin-bottom:6px;">局面編集</div>
+    <div class="row">
+      <span class="small">ひな形:</span>
+      <select id="editTmpl">${EDIT_TEMPLATES.map(t => `<option value="${t.id}" ${t.id===E.tmpl?"selected":""}>${t.name}</option>`).join("")}</select>
+      <span class="small">手番:</span>
+      <select id="editTurn"><option value="S" ${E.turn==="S"?"selected":""}>先手番</option><option value="G" ${E.turn==="G"?"selected":""}>後手番</option></select>
+      <span class="small">自分は:</span>
+      <select id="editSide"><option value="" ${!E.side?"selected":""}>(選んでほしい)</option><option value="S" ${E.side==="S"?"selected":""}>先手側</option><option value="G" ${E.side==="G"?"selected":""}>後手側</option></select>
+      <button class="secondary" id="editFlip" style="padding:3px 10px; font-size:11px;">盤を反転</button>
+    </div></div>`;
+  const sel = E.sel, bc = boxCounts(E);
+  const ownerName = (o) => o === "S" ? "先手" : "後手";
+  const topSide = flip ? "S" : "G", bottomSide = flip ? "G" : "S";
+  let selText = "盤・駒台・駒箱の駒をタップで選び、行き先(マス・駒台・駒箱)をタップ。盤の駒を素早く2回タップすると、歩→と→反対の歩→反対のと…と切り替わる。選択の解除は、選んだ駒をもう一度ゆっくりタップ";
+  if (sel && sel.from === "board") { const cell = E.board[key(sel.col, sel.row)]; if (cell) selText = `選択中: ${ZEN[sel.col-1]}${KAN[sel.row-1]}の${ownerName(cell[0])}の${cell[1]}。行き先をタップ(相手の駒の上なら、取って自分の駒台へ)`; }
+  else if (sel && sel.from === "box") selText = `選択中: 駒箱の${sel.piece}(残り${bc[sel.piece]}枚)。置くマスか駒台をタップ(続けて置ける)`;
+  else if (sel && sel.from === "hand") selText = `選択中: ${ownerName(sel.side)}の駒台の${CODE_TO_JP[sel.code]}。行き先をタップ`;
+  const handTiles = (sd) => HAND_ORDER.filter(code => (E.hands[sd][code] || 0) > 0).map(code => {
+    const n = E.hands[sd][code], on = sel && sel.from === "hand" && sel.side === sd && sel.code === code;
+    return `<span class="tile ${on?"selected":""} ${sd==="G"?"p-gote far":""}" data-hand="${sd}:${code}"><span class="pc">${CODE_TO_JP[code]}</span>${n>1?`<span class="n">${n}</span>`:""}</span>`;
+  }).join("");
+  const handTray = (sd) => `<div class="tray" data-zone="${sd}">${handTiles(sd)}<span class="tray-badge ${sd==="S"?"s":""}">${ownerName(sd)}</span></div>`;
+  const boxTiles = BOX_ORDER.filter(pc => bc[pc] > 0).map(pc => {
+    const on = sel && sel.from === "box" && sel.piece === pc;
+    return `<span class="tile ${on?"selected":""}" data-box="${pc}"><span class="pc">${pc}</span>${bc[pc]>1?`<span class="n">${bc[pc]}</span>`:""}</span>`;
+  }).join("");
+  html += `<div style="display:inline-block;">`;
+  html += handTray(topSide);
+  html += `<table class="board-table"><tr>`;
+  files.forEach(f => html += `<td class="label">${f}</td>`);
+  html += `<td class="label"></td></tr>`;
+  for (let ri = 0; ri < 9; ri++) {
+    const row = flip ? 9 - ri : ri + 1;
+    html += `<tr>`;
+    files.forEach(col => {
+      const cell = E.board[key(col, row)];
+      const isMoveSrc = sel && sel.from === "board" && sel.col === col && sel.row === row;
+      let content = "";
+      if (cell) {
+        const classes = [cell[0]==="G" ? "p-gote" : "", cell[0]===topSide ? "p-far" : ""].filter(Boolean).join(" ");
+        content = classes ? `<span class="${classes}">${cell[1]}</span>` : cell[1];
+      }
+      html += `<td class="clickable ${isMoveSrc?"selected":""}" data-col="${col}" data-row="${row}">${content}</td>`;
+    });
+    html += `<td class="label">${RANKS[row-1]}</td></tr>`;
+  }
+  html += `</table>`;
+  html += handTray(bottomSide);
+  html += `<div class="tray" data-zone="box">${boxTiles}<span class="tray-badge box">駒箱</span></div>`;
+  html += `<div class="small" style="min-height:5.2em; margin-top:6px;">${selText}</div>`; // 説明は盤の下に固定の高さで置く(選択しても盤の位置が動かない)
+  html += `</div>`;
+  v.errors.forEach(m => html += `<div class="warn">✕ ${m}</div>`);
+  v.warnings.forEach(m => html += `<div class="tip" style="background:#fff8e6; border-color:#e6d28f; color:#7a6420;">△ ${m}</div>`);
+  html += `<div class="row" style="margin-top:8px;">
+    <button id="editStart" ${v.errors.length?"disabled":""}>この局面で研究を始める</button>
+    <button class="secondary" id="editCancel">やめる</button></div>`;
+  el.innerHTML = html;
+
+  el.querySelectorAll("td[data-col]").forEach(td => { td.onclick = () => { editTapCell(parseInt(td.dataset.col,10), parseInt(td.dataset.row,10)); renderPositionEditor(); }; });
+  el.querySelectorAll("[data-box]").forEach(t => { t.onclick = (ev) => { ev.stopPropagation(); editTapBoxChip(t.dataset.box); renderPositionEditor(); }; });
+  el.querySelectorAll("[data-hand]").forEach(t => { t.onclick = (ev) => { ev.stopPropagation(); const [sd, code] = t.dataset.hand.split(":"); editTapHandChip(sd, code); renderPositionEditor(); }; });
+  el.querySelectorAll("[data-zone]").forEach(z => { z.onclick = () => { editTapZone(z.dataset.zone); renderPositionEditor(); }; });
+  document.getElementById("editTmpl").onchange = (e) => {
+    if (EDIT.dirty && !confirm("編集した内容は消える。ひな形を切り替える?")) { renderPositionEditor(); return; }
+    const side = EDIT.side; EDIT = newEditState(e.target.value); EDIT.side = side; renderPositionEditor();
+  };
+  document.getElementById("editTurn").onchange = (e) => { EDIT.turn = e.target.value; EDIT.dirty = true; renderPositionEditor(); };
+  document.getElementById("editSide").onchange = (e) => { EDIT.side = e.target.value || null; EDIT.flip = null; renderPositionEditor(); };
+  document.getElementById("editFlip").onclick = () => { EDIT.flip = !flip; renderPositionEditor(); };
+  document.getElementById("editCancel").onclick = () => { EDIT = null; renderEditorTab(); };
+  document.getElementById("editStart").onclick = () => {
+    const res = editStartResearch();
+    if (!res.ok) { alert(res.message); return; }
+    renderEditorTab();
+  };
+}
+
+
+/* =========================================================
+   .kif 取り込み
+   対応: 平手・駒落ち(香/右香/角/飛/二/四/六枚落ち)・盤面図(途中図)から始まる棋譜、「同」、変化手順、コメント(*)
+   ========================================================= */
+const KIF_TERMINALS = ["投了","中断","千日手","持将棋","詰み","詰","切れ負け","反則勝ち","反則負け","不戦勝","不戦敗","入玉勝ち","封じ手","不詰","time-up"];
+const KIF_HANDICAP_ID = { "平手":"hirate", "香落ち":"kyo", "右香落ち":"rkyo", "角落ち":"kaku", "飛車落ち":"hisha",
+  "二枚落ち":"2mai", "四枚落ち":"4mai", "六枚落ち":"6mai" };
+const KIF_BOARD_PIECE = { "歩":"歩","香":"香","桂":"桂","銀":"銀","金":"金","角":"角","飛":"飛","玉":"玉","王":"玉",
+  "と":"と","杏":"成香","圭":"成桂","全":"成銀","馬":"馬","龍":"龍","竜":"龍" };
+const KIF_MOVE_RE = /^(?:([１２３４５６７８９])([一二三四五六七八九])|同)(成香|成桂|成銀|歩|香|桂|銀|金|角|飛|玉|王|と|馬|龍|竜)(不成|成)?(打)?(?:\((\d)(\d)\))?$/;
+
+/* 文字コードを判定して文字列にする(UTF-8でなければShift_JIS) */
+function decodeKifBytes(bytes) {
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch (e) { text = new TextDecoder("shift_jis").decode(bytes); }
+  return text.replace(/^﻿/, "");
+}
+function kifKanjiNum(str) {
+  if (!str) return 1;
+  const d = { "一":1,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9 };
+  if (str[0] === "十") return 10 + (str.length > 1 ? (d[str[1]] || 0) : 0);
+  return d[str[0]] || 1;
+}
+function kifNormalizeToken(tok) {
+  return tok.replace(/[\s\u3000]+/g, "").replace(/^[1-9]/, (c) => "１２３４５６７８９"[parseInt(c, 10) - 1]);
+}
+function kifParseHands(str) {
+  const h = {};
+  if (!str || /なし/.test(str)) return h;
+  str.split(/[\s　]+/).filter(Boolean).forEach(tok => {
+    const base = KIF_BOARD_PIECE[tok[0]]; if (!base || !PIECE_CODE[base]) return;
+    const code = PIECE_CODE[base];
+    h[code] = (h[code] || 0) + kifKanjiNum(tok.slice(1));
+  });
+  return h;
+}
+
+/* テキスト → { headers, root:{board,hands,turn,rootPly,handicap}, lines:[{from, moves:[{token,comments}]}], rootNote, errors, diagram } */
+function parseKif(text) {
+  const rawLines = text.replace(/\r\n?/g, "\n").split("\n");
+  const headers = {};
+  const errors = [];
+  const lines = [{ from: 0, moves: [] }]; // from = この手順が本譜から分かれる手数(0=本譜)
+  let cur = lines[0];
+  let lastMove = null;
+  let rootNote = [];
+  const diagramRows = []; const diagHands = { S:"", G:"" }; let diagTurn = null; let hasDiagram = false;
+  let started = false; // 指し手が始まったか
+  for (let raw of rawLines) {
+    const line = raw.replace(/\s+$/, "");
+    if (!line.trim()) continue;
+    const t = line.trim();
+    if (t[0] === "#") continue;
+    if (t[0] === "&") continue;
+    if (t[0] === "*") {
+      const c = t.slice(1);
+      if (!started) rootNote.push(c);
+      else if (lastMove) lastMove.comments.push(c);
+      continue;
+    }
+    // 盤面図
+    if (/^\|.*\|[一二三四五六七八九]$/.test(t)) { diagramRows.push(t); hasDiagram = true; continue; }
+    if (/^[+＋]-+[+＋]$/.test(t) || /^[９８７６５４３２１\s]+$/.test(t)) continue;
+    let m = /^(先手|下手)の持駒[:：]\s*(.*)$/.exec(t); if (m) { diagHands.S = m[2]; hasDiagram = true; continue; }
+    m = /^(後手|上手)の持駒[:：]\s*(.*)$/.exec(t); if (m) { diagHands.G = m[2]; hasDiagram = true; continue; }
+    if (/^(先手番|後手番|上手番|下手番)$/.test(t)) { diagTurn = (t[0] === "後" || t[0] === "上") ? "G" : "S"; continue; }
+    // 変化
+    m = /^変化[:：]\s*(\d+)手/.exec(t);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      let base = null;
+      for (let i = lines.length - 1; i >= 0; i--) { if (lines[i].from + lines[i].moves.length >= n - 1) { base = lines[i]; break; } }
+      if (!base) { errors.push(`変化(${n}手目)の分かれ元が見つからない`); cur = { from: n - 1, moves: [], broken: true, baseIdx: -1 }; lines.push(cur); lastMove = null; continue; }
+      cur = { from: n - 1, moves: [], baseIdx: lines.indexOf(base) };
+      lines.push(cur); lastMove = null; started = true;
+      continue;
+    }
+    // 指し手
+    m = /^(\d+)\s+(.+?)\s*(?:\(\s*\d+:\d+.*)?$/.exec(t);
+    if (m) {
+      const tok = m[2].trim();
+      if (/^[-─]+/.test(tok) && /指手/.test(t)) continue;
+      if (KIF_TERMINALS.some(x => tok.startsWith(x))) { started = true; lastMove = null; continue; }
+      const mv = { token: tok, comments: [] };
+      // 変化行の最初の手は from の次の手
+      cur.moves.push(mv); lastMove = mv; started = true;
+      continue;
+    }
+    // ヘッダ
+    m = /^([^：:\s]+)[：:]\s*(.*)$/.exec(t);
+    if (m && !started) { headers[m[1]] = m[2].trim(); continue; }
+  }
+  // 初期局面
+  let root;
+  if (hasDiagram && diagramRows.length === 9) {
+    const board = {};
+    diagramRows.forEach((row, ri) => {
+      const inner = row.slice(row.indexOf("|") + 1, row.lastIndexOf("|"));
+      for (let i = 0; i < 9; i++) {
+        const mark = inner[i*2], pc = inner[i*2+1];
+        if (!pc || pc === "・" || pc === " ") continue;
+        const piece = KIF_BOARD_PIECE[pc];
+        if (!piece) { errors.push(`盤面図に読めない駒がある(${pc})`); continue; }
+        board[key(9 - i, ri + 1)] = [(mark === "v" || mark === "V") ? "G" : "S", piece];
+      }
+    });
+    const hands = { S: kifParseHands(diagHands.S), G: kifParseHands(diagHands.G) };
+    const turn = diagTurn || "S";
+    const hash = encodeStateCompact(board, hands, turn);
+    const initHash = encodeStateCompact(initialBoard(), { S:{}, G:{} }, "S");
+    root = { board, hands, turn, rootPly: hash === initHash ? 0 : null, handicap: "盤面図" };
+  } else {
+    const hname = headers["手合割"] || "平手";
+    const tid = KIF_HANDICAP_ID[hname];
+    if (!tid) { errors.push(`手合割「${hname}」は未対応(平手・駒落ち・盤面図のみ)`); }
+    const E = newEditState(tid || "hirate");
+    root = { board: E.board, hands: E.hands, turn: E.turn, rootPly: 0, handicap: hname };
+  }
+  return { headers, root, lines, rootNote: rootNote.join("\n"), errors };
+}
+
+/* 指し手の文字列 → legalMoves の手オブジェクト。失敗したら null */
+function kifTokenToMove(token, node, lastTo) {
+  const t = kifNormalizeToken(token);
+  const m = KIF_MOVE_RE.exec(t);
+  if (!m) return null;
+  let to;
+  if (m[1]) to = [ZEN.indexOf(m[1]) + 1, KAN.indexOf(m[2]) + 1];
+  else { if (!lastTo) return null; to = lastTo; }
+  let piece = m[3]; if (piece === "王") piece = "玉"; if (piece === "竜") piece = "龍";
+  const promote = m[4] === "成";
+  const drop = !!m[5];
+  const from = m[6] ? [parseInt(m[6], 10), parseInt(m[7], 10)] : null;
+  const legal = legalMoves(node.board, node.hands, node.turn);
+  let cands = legal.filter(x => x.to[0] === to[0] && x.to[1] === to[1]);
+  if (drop) cands = cands.filter(x => x.type === "drop" && x.piece === piece);
+  else {
+    cands = cands.filter(x => x.type === "move" && x.piece === piece && !!x.promote === promote);
+    if (from) cands = cands.filter(x => x.from[0] === from[0] && x.from[1] === from[1]);
+  }
+  return cands.length === 1 ? cands[0] : null;
+}
+
+/* parseKif の結果 → 研究データ。途中で読めない手があればそこまでを取り込み、errors に残す */
+function kifToResearch(parsed, fileName) {
+  const errors = parsed.errors.slice();
+  const root = parsed.root;
+  const rootHash = encodeStateCompact(root.board, root.hands, root.turn);
+  const r = {
+    id: null, title: "", side: null, tags: [], createdAt: new Date().toISOString(),
+    sourceNote: `.kif取り込み(${fileName || "ファイル"})`, rootPly: root.rootPly,
+    root: rootHash, nodes: { [rootHash]: { board: cloneBoard(root.board), hands: cloneHands(root.hands), turn: root.turn, edges: {}, note: parsed.rootNote || "" } },
+  };
+  const h = parsed.headers;
+  const sn = h["先手"] || h["下手"], gn = h["後手"] || h["上手"];
+  r.title = h["タイトル"] || h["棋戦"] || ((sn && gn) ? `${sn} vs ${gn}` : "") || (fileName || "").replace(/\.[^.]+$/, "");
+  if (parsed.errors.length && parsed.root.handicap && !KIF_HANDICAP_ID[parsed.root.handicap] && parsed.root.handicap !== "盤面図") return { research: null, errors, names: { sente: sn, gote: gn } };
+
+  const resolved = []; // 各手順(lines[i])を、本譜からの完全な手の列に展開したもの
+  let variations = 0, plyMain = 0, imported = 0;
+  parsed.lines.forEach((ln, li) => {
+    if (ln.broken) return;
+    const prefix = (li === 0) ? [] : (resolved[ln.baseIdx] || []).slice(0, ln.from);
+    if (prefix.length < ln.from) { errors.push(`変化(${ln.from + 1}手目〜)の分かれ元の手順が取り込めなかったため、この変化は取り込まない`); return; }
+    const seq = prefix.slice(); // [{mv}] 完全な手の列
+    // prefixを盤に反映
+    let node = { board: cloneBoard(root.board), hands: cloneHands(root.hands), turn: root.turn };
+    let lastTo = null, hash = rootHash;
+    for (const st of prefix) {
+      applyMoveObj(node.board, node.hands, node.turn, st.mv); node.turn = node.turn === "S" ? "G" : "S"; lastTo = st.mv.to; hash = encodeStateCompact(node.board, node.hands, node.turn);
+    }
+    for (let i = 0; i < ln.moves.length; i++) {
+      const mvTok = ln.moves[i];
+      const num = ln.from + i + 1;
+      const mv = kifTokenToMove(mvTok.token, node, lastTo);
+      if (!mv) { errors.push(`${li === 0 ? "" : "変化 "}${num}手目「${mvTok.token}」を読めなかった(または指せない手)。ここまでを取り込む`); break; }
+      applyMoveObj(node.board, node.hands, node.turn, mv);
+      const fromHash = hash;
+      node.turn = node.turn === "S" ? "G" : "S";
+      hash = encodeStateCompact(node.board, node.hands, node.turn);
+      if (!r.nodes[hash]) r.nodes[hash] = { board: cloneBoard(node.board), hands: cloneHands(node.hands), turn: node.turn, edges: {}, note: "" };
+      r.nodes[fromHash].edges[JSON.stringify(mv)] = { mv, to: hash };
+      if (mvTok.comments.length) {
+        const add = mvTok.comments.join("\n");
+        const nd = r.nodes[hash];
+        if (!nd.note) nd.note = add; else if (!nd.note.includes(add)) nd.note += "\n" + add;
+      }
+      lastTo = mv.to; seq.push({ mv }); imported++;
+    }
+    resolved[li] = seq;
+    if (li === 0) plyMain = seq.length; else variations++;
+  });
+  return { research: r, errors, names: { sente: sn, gote: gn }, plyMain, variations, nodeCount: Object.keys(r.nodes).length };
+}
+function kifGuessSide(names) {
+  let mine = [];
+  try { mine = JSON.parse(localStorage.getItem("shogi_tool_mynames")) || []; } catch (e) {}
+  if (!mine.length) return null;
+  const s = names.sente && mine.includes(names.sente), g = names.gote && mine.includes(names.gote);
+  if (s && !g) return "S"; if (g && !s) return "G"; return null;
+}
+
+/* 取り込みの本体: items=[{research, side}] を既存の研究と照合して list に反映し、結果の要約を返す。
+   decide(candidate, item) が true を返したら統合する。mode: "ask"(1件ずつ) / "all"(該当は全部統合) / "none"(統合しない) */
+function applyImports(items, list, mode, decide) {
+  const summary = { added: 0, merged: 0, skipped: 0, details: [] };
+  let seq = 0;
+  const base = Date.now();
+  let work = list.slice();
+  items.forEach(item => {
+    const r = item.research;
+    if (!r || !item.side) { summary.skipped++; return; }
+    r.side = item.side;
+    if (item.tags && item.tags.length) r.tags = Array.from(new Set([...(r.tags || []), ...item.tags]));
+    let mergedInto = null;
+    if (mode !== "none") {
+      const cands = findMergeCandidates(r, work);
+      for (const c of cands) {
+        const ok = (mode === "all") ? true : decide(c, item);
+        if (ok) { mergedInto = c; break; }
+        r.mergeDeclined = (r.mergeDeclined || []).concat(c.research.id);
+      }
+    }
+    if (mergedInto) {
+      const merged = mergedInto.merged;
+      work = work.map(x => x.id === merged.id ? merged : x);
+      summary.merged++; summary.details.push({ title: r.title, into: merged.title || "(無題)" });
+    } else {
+      r.id = base + (seq++);
+      (r.mergeDeclined || []).forEach(did => { const o = work.find(x => x.id === did); if (o && !(o.mergeDeclined || []).includes(r.id)) o.mergeDeclined = (o.mergeDeclined || []).concat(r.id); });
+      work.push(r); summary.added++; summary.details.push({ title: r.title, into: null });
+    }
+  });
+  summary.list = work;
+  return summary;
+}
+
+let IMPORTQ = null; // 取り込み確認中の状態 { items:[{fileName, research, errors, side, plyMain, variations, nodeCount, names}], mode, tagsText }
+async function kifLoadFiles(fileList) {
+  const items = [];
+  for (const f of Array.from(fileList)) {
+    const buf = new Uint8Array(await f.arrayBuffer());
+    let text;
+    try { text = decodeKifBytes(buf); } catch (e) { items.push({ fileName: f.name, research: null, errors: ["文字コードを判定できなかった"], side: null }); continue; }
+    const parsed = parseKif(text);
+    const res = kifToResearch(parsed, f.name);
+    const side = res.research ? kifGuessSide(res.names) : null;
+    items.push({ fileName: f.name, research: res.research, errors: res.errors, side, plyMain: res.plyMain, variations: res.variations, nodeCount: res.nodeCount, names: res.names });
+  }
+  return items;
+}
+function renderImportPreview() {
+  const Q = IMPORTQ;
+  const el = document.getElementById("panel-editor");
+  let html = `<div class="card"><div style="font-weight:800; margin-bottom:6px;">.kifの取り込み(${Q.items.length}ファイル)</div>
+    <div class="small" style="margin-bottom:8px;">先手側の研究か後手側の研究かを、ファイルごとに選んでほしい(名前が自分のIDと一致したものは自動で選んである)。</div>
+    <div class="row" style="margin-bottom:8px;">
+      <button class="secondary" id="impAllS" style="padding:3px 10px; font-size:11px;">全部を先手側にする</button>
+      <button class="secondary" id="impAllG" style="padding:3px 10px; font-size:11px;">全部を後手側にする</button>
+    </div>`;
+  html += `<table class="data"><thead><tr><th>ファイル</th><th>内容</th><th>自分は</th></tr></thead><tbody>`;
+  Q.items.forEach((it, i) => {
+    const ok = !!it.research;
+    html += `<tr><td>${it.fileName}</td><td class="small">${ok ? `${it.research.title || ""}<br>${it.plyMain}手${it.variations ? ` / 変化${it.variations}本` : ""} / ${it.nodeCount}局面` : "取り込めない"}
+      ${it.errors.map(e => `<div class="warn" style="margin-top:4px;">${e}</div>`).join("")}</td>
+      <td>${ok ? `<select data-impside="${i}"><option value="" ${!it.side?"selected":""}>(選ぶ)</option><option value="S" ${it.side==="S"?"selected":""}>先手側</option><option value="G" ${it.side==="G"?"selected":""}>後手側</option></select>` : "-"}</td></tr>`;
+  });
+  html += `</tbody></table>`;
+  html += `<div class="row" style="margin-top:10px;"><span class="small">全部に付けるタグ(カンマ区切り・任意):</span><input type="text" id="impTags" value="${(Q.tagsText||"").replace(/"/g,"&quot;")}" list="tagHints" style="width:240px;"></div>
+    <datalist id="tagHints">${allTagHints().map(h => `<option value="${h.replace(/"/g,"&quot;")}">`).join("")}</datalist>`;
+  html += `<div class="row" style="margin-top:8px;"><span class="small">既存の研究と重なっていたら:</span>
+    <select id="impMode"><option value="ask" ${Q.mode==="ask"?"selected":""}>1件ずつ確認する</option><option value="all" ${Q.mode==="all"?"selected":""}>該当するものは全部統合する</option><option value="none" ${Q.mode==="none"?"selected":""}>統合せず別々に保存する</option></select></div>`;
+  html += `<div class="row" style="margin-top:10px;"><button id="impGo">取り込む</button><button class="secondary" id="impCancel">やめる</button></div></div>`;
+  el.innerHTML = html;
+  el.querySelectorAll("[data-impside]").forEach(sel => { sel.onchange = () => { Q.items[parseInt(sel.dataset.impside, 10)].side = sel.value || null; }; });
+  document.getElementById("impAllS").onclick = () => { Q.items.forEach(it => { if (it.research) it.side = "S"; }); renderImportPreview(); };
+  document.getElementById("impAllG").onclick = () => { Q.items.forEach(it => { if (it.research) it.side = "G"; }); renderImportPreview(); };
+  document.getElementById("impTags").onchange = (e) => { Q.tagsText = e.target.value; };
+  document.getElementById("impMode").onchange = (e) => { Q.mode = e.target.value; };
+  document.getElementById("impCancel").onclick = () => { IMPORTQ = null; renderEditorTab(); };
+  document.getElementById("impGo").onclick = () => runImport();
+}
+async function runImport() {
+  const Q = IMPORTQ;
+  const targets = Q.items.filter(it => it.research);
+  if (targets.some(it => !it.side)) { alert("先手側か後手側かが選ばれていないファイルがある。"); return; }
+  const tags = (Q.tagsText || "").split(/[,、]/).map(x => x.trim()).filter(Boolean);
+  targets.forEach(it => { it.tags = tags; });
+  const btn = document.getElementById("impGo"); if (btn) { btn.disabled = true; btn.textContent = "取り込み中..."; }
+  const decide = (c, item) => confirm(`「${item.research.title || item.fileName}」は、既存の「${c.research.title || "(無題)"}」と重なっている。\n理由: ${c.reason}\n\n統合する?\n(OK=統合する / キャンセル=統合しない)`);
+  const sum = applyImports(targets, loadResearches(), Q.mode, decide);
+  const result = await saveResearches(sum.list);
+  let msg = `${sum.added}件を新しい研究として、${sum.merged}件を既存の研究に統合して取り込んだ。`;
+  if (result.limitHit) msg += "\n無料プランの研究の件数上限に達したため、一部は保存できなかった。";
+  if (result.sizeHit) msg += "\n大きさの上限を超えた研究があり、一部は保存できなかった。";
+  alert(msg);
+  IMPORTQ = null; CURRENT = null; PATH = [];
+  renderEditorTab();
+}
+
+function renderEditorTab() {
+  const el = document.getElementById("panel-editor");
+  if (!CURRENT && IMPORTQ) { renderImportPreview(); return; }
+  if (!CURRENT && EDIT) { renderPositionEditor(); return; }
+  if (!CURRENT) {
+    let handoffData = null;
+    let matchIds = [];
+    try {
+      const raw = localStorage.getItem(LS_HANDOFF);
+      if (raw) handoffData = JSON.parse(raw);
+    } catch(e){}
+
+    let html = `<div class="card">`;
+    if (handoffData) {
+      const incomingHash = encodeStateCompact(handoffData.board, handoffData.hands, handoffData.turn);
+      const matches = findMatchingResearches(incomingHash);
+      matchIds = matches.map(m => m.id);
+      if (matches.length > 0) {
+        html += `<div class="tip">サイト1から渡された局面は、既存の研究(${matches.length}件)と同じ開始局面。続きを書き足すか、別の新規研究として作るか選べる。</div>`;
+        matches.forEach(m => {
+          html += `<div class="edge-item" data-continueid="${m.id}">
+            <span>${m.title || "(無題)"} ｜ ${(m.createdAt||"").slice(0,10)}</span>
+            <span class="small">この研究に続きを追記する</span>
+          </div>`;
+        });
+        html += `<div class="row" style="margin-top:8px;">
+          <button id="btnFromHandoffNew">同じ局面から別の新規研究として始める</button>
+        </div>`;
+      } else {
+        html += `<div class="tip">サイト1から渡された局面が見つかった。</div>`;
+        html += `<div class="row"><button id="btnFromHandoffNew">サイト1の局面から始める</button></div>`;
+      }
+    }
+    html += `<div class="row" style="margin-top:8px;">
+      <button class="secondary" id="btnScratchS">初期局面から新規(先手側の研究)</button>
+      <button class="secondary" id="btnScratchG">初期局面から新規(後手側の研究)</button>
+    </div>`;
+    html += `<div class="row" style="margin-top:8px;"><button class="secondary" id="btnPosEdit">局面を編集して始める(駒落ち・任意の局面)</button>
+      <button class="secondary" id="btnKifImport">.kifファイルから取り込む</button>
+      <input type="file" id="kifInput" accept=".kif,.kifu,.txt" multiple style="display:none;"></div>`;
+    html += `</div>`;
+    el.innerHTML = html;
+
+    document.getElementById("btnPosEdit").onclick = () => { EDIT = newEditState("hirate"); renderPositionEditor(); };
+    document.getElementById("btnKifImport").onclick = () => document.getElementById("kifInput").click();
+    document.getElementById("kifInput").onchange = async (e) => {
+      if (!e.target.files.length) return;
+      const items = await kifLoadFiles(e.target.files);
+      IMPORTQ = { items, mode: "ask", tagsText: "" };
+      renderEditorTab();
+    };
+    document.getElementById("btnScratchS").onclick = () => {
+      CURRENT = newEmptyResearch(null, "S"); PATH = []; SELECTED = null; renderEditorTab();
+    };
+    document.getElementById("btnScratchG").onclick = () => {
+      CURRENT = newEmptyResearch(null, "G"); PATH = []; SELECTED = null; renderEditorTab();
+    };
+    const bhNew = document.getElementById("btnFromHandoffNew");
+    if (bhNew) bhNew.onclick = () => {
+      CURRENT = newResearchFromPosition(handoffData.board, handoffData.hands, handoffData.turn, handoffData.sourceNote || "サイト1より", handoffData.ply, handoffData.side || null);
+      CURRENT.mergeDeclined = matchIds.slice(); // 「別の研究として始める」を選んだ相手には、保存時に統合を聞き直さない
+      localStorage.removeItem(LS_HANDOFF);
+      PATH = []; SELECTED = null; renderEditorTab();
+    };
+    el.querySelectorAll("[data-continueid]").forEach(item => {
+      item.onclick = () => {
+        const list = loadResearches();
+        const found = list.find(r => String(r.id) === item.dataset.continueid);
+        if (!found) return;
+        CURRENT = found; PATH = []; SELECTED = null;
+        localStorage.removeItem(LS_HANDOFF);
+        renderEditorTab();
+      };
+    });
+    return;
+  }
+
+  const node = currentNode();
+  const mated = isCheckmate(node.board, node.hands, node.turn);
+  const inCheck = !mated && isInCheck(node.board, node.turn);
+
+  let html = `<div class="card">
+    <div class="row" style="justify-content:space-between;">
+      <input type="text" id="titleInput" placeholder="この研究のタイトル(未入力可)" value="${(CURRENT.title||"").replace(/"/g,"&quot;")}" style="flex:1; min-width:160px;">
+      <button id="btnSaveResearch">保存</button>
+      <button class="secondary" id="btnCloseResearch">閉じる</button>
+    </div>
+    <div class="small" style="margin-top:6px;">開始: ${CURRENT.sourceNote}</div>
+    <div class="row" style="margin-top:8px;">
+      <span class="small">自分は</span>
+      <select id="sideSel">
+        <option value="" ${!CURRENT.side?"selected":""}>(未設定)</option>
+        <option value="S" ${CURRENT.side==="S"?"selected":""}>先手側</option>
+        <option value="G" ${CURRENT.side==="G"?"selected":""}>後手側</option>
+      </select>
+      <button class="secondary" id="btnFlip" style="padding:3px 10px; font-size:11px;">盤を反転</button>
+    </div>
+    <div style="margin-top:8px;" id="tagArea"></div>
+  </div>`;
+
+  html += `<div class="crumb"><a id="crumbRoot">開始局面</a>`;
+  PATH.forEach((p,i) => { html += ` &gt; <a class="crumbLink" data-idx="${i+1}">${moveToNotation(p.mv)}</a>`; });
+  html += `</div>`;
+
+  if (mated) html += `<div class="warn">この局面、手番(${node.turn==="S"?"先手":"後手"})の詰みです。</div>`;
+  else if (inCheck) html += `<div class="warn">王手がかかっている。</div>`;
+
+  html += `<div class="flex-gap"><div>`;
+  html += renderBoardHTML(node);
+  html += `<textarea id="noteBox" placeholder="この局面のメモ(フォーカスを外すと自動保存)" style="margin-top:8px; width:280px;">${node.note||""}</textarea>`;
+  html += `</div>`;
+
+  html += `<div style="min-width:220px; flex:1;">`;
+  html += engineSlotHTML();
+  html += `<div class="small" style="font-weight:700; margin-bottom:6px;">${SELECTED?"移動先(または同じ駒を再タップで選択解除)をタップ":"駒か持ち駒をタップして手を選ぶ"}</div>`;
+  const edges = Object.values(node.edges);
+  if (edges.length) {
+    html += `<div class="small" style="font-weight:700; margin:10px 0 6px;">この局面から記録済みの手</div>`;
+    edges.forEach(e => {
+      html += `<div class="edge-item" data-edgekey="${encodeURIComponent(JSON.stringify(e.mv))}">
+        <span>${moveToNotation(e.mv)}</span>
+        <span class="small">${CURRENT.nodes[e.to].note ? "📝" : ""}</span>
+      </div>`;
+    });
+  }
+  html += `</div></div>`;
+
+  el.innerHTML = html;
+
+  el.querySelectorAll("td.clickable").forEach(td => {
+    td.onclick = () => onBoardCellClick(parseInt(td.dataset.col,10), parseInt(td.dataset.row,10));
+  });
+  el.querySelectorAll("[data-hand]").forEach(span => {
+    if (span.classList.contains("disabled")) return;
+    span.onclick = () => onHandClick(span.dataset.hand, span.dataset.side);
+  });
+  document.getElementById("crumbRoot").onclick = () => { PATH=[]; SELECTED=null; renderEditorTab(); };
+  el.querySelectorAll(".crumbLink").forEach(a => {
+    a.onclick = () => { PATH = PATH.slice(0, parseInt(a.dataset.idx,10)); SELECTED=null; renderEditorTab(); };
+  });
+  el.querySelectorAll("[data-edgekey]").forEach(item => {
+    item.onclick = () => {
+      const mv = JSON.parse(decodeURIComponent(item.dataset.edgekey));
+      const node2 = currentNode();
+      const edge = node2.edges[JSON.stringify(mv)];
+      PATH.push({ mv, hash: edge.to }); SELECTED=null; renderEditorTab();
+    };
+  });
+  document.getElementById("sideSel").onchange = (e) => { CURRENT.side = e.target.value || null; CURRENT._flip = null; renderEditorTab(); };
+  document.getElementById("btnFlip").onclick = () => { CURRENT._flip = !viewFlipped(); renderEditorTab(); };
+  renderTagArea();
+  engineAfterRender();
+  const noteBox = document.getElementById("noteBox");
+  if (noteBox) noteBox.onblur = (e) => { currentNode().note = e.target.value; };
+  document.getElementById("titleInput").oninput = (e) => { CURRENT.title = e.target.value; };
+  document.getElementById("btnCloseResearch").onclick = () => {
+    if (!confirm("保存してないと変更は失われる。閉じる?")) return;
+    CURRENT = null; PATH = []; SELECTED = null; renderEditorTab();
+  };
+  document.getElementById("btnSaveResearch").onclick = async () => {
+    flushTagInput();
+    if (!CURRENT.side) { alert("先手側の研究か後手側の研究かを選んでから保存してほしい。"); return; }
+    const btn = document.getElementById("btnSaveResearch");
+    btn.disabled = true; btn.textContent = "保存中...";
+    const list = loadResearches();
+    const cands = findMergeCandidates(CURRENT, list);
+    for (const c of cands) {
+      const name = c.research.title || "(無題)";
+      const line = sharedLineText(c.research, c.deepHash);
+      const msg = `「${name}」と重なっている(共通${c.shared}局面)。\n理由: ${c.reason}\n共通の手順: ${line}\n\nこの研究に統合する?\n(OK=統合する / キャンセル=統合しない)`;
+      if (confirm(msg)) {
+        const here = currentHash();
+        const merged = c.merged;
+        const newList = list.filter(r => r.id !== CURRENT.id).map(r => r.id === merged.id ? merged : r);
+        await saveResearches(newList);
+        CURRENT = merged;
+        PATH = findPathTo(merged, here) || [];
+        SELECTED = null;
+        alert("統合して保存した。");
+        renderEditorTab();
+        return;
+      }
+      CURRENT.mergeDeclined = (CURRENT.mergeDeclined || []).concat(c.research.id);
+    }
+    const isNew = !CURRENT.id;
+    if (!CURRENT.id) CURRENT.id = Date.now();
+    const idx = list.findIndex(r => r.id === CURRENT.id);
+    if (idx >= 0) list[idx] = CURRENT; else list.push(CURRENT);
+    // 「統合しない」と決めた相手側にも記録して、相手を編集して保存した時に聞き直さないようにする
+    (CURRENT.mergeDeclined || []).forEach(did => {
+      const other = list.find(r => r.id === did);
+      if (other && !(other.mergeDeclined || []).includes(CURRENT.id)) other.mergeDeclined = (other.mergeDeclined || []).concat(CURRENT.id);
+    });
+    const result = await saveResearches(list);
+    btn.disabled = false; btn.textContent = "保存";
+    if (result && result.limitHit) {
+      if (isNew) CURRENT.id = null; // 新規作成が上限で弾かれた場合はidを取り消す
+      alert("無料プランの研究保存上限に達しているため、この研究は保存できなかった。既存の研究を整理するか、有料プランに切り替えてほしい。");
+    } else if (result && result.sizeHit) {
+      if (isNew) CURRENT.id = null;
+      alert(`この研究は大きくなりすぎていて(${countNodes(CURRENT)}局面)、無料プランの1研究あたりの上限を超えている。分けて保存するか、有料プランに切り替えてほしい。`);
+    } else {
+      alert("保存した。");
+    }
+  };
+}
+
+/* ---------- タブ: 保存済み研究 ---------- */
+let LIST_TAG_FILTER = null;
+function renderListTab() {
+  const el = document.getElementById("panel-list");
+  const list = loadResearches();
+  if (list.length === 0) { el.innerHTML = `<div class="small">まだ保存された研究がない。</div>`; return; }
+  const usedTags = Array.from(new Set(list.flatMap(r => r.tags || [])));
+  let html = "";
+  if (usedTags.length) {
+    html += `<div style="margin-bottom:8px;"><span class="small">タグで絞り込み:</span> `;
+    usedTags.forEach(t => { html += `<span class="chip ${LIST_TAG_FILTER===t?"on":""}" data-filtertag="${t.replace(/"/g,"&quot;")}" style="cursor:pointer;">${t}</span>`; });
+    if (LIST_TAG_FILTER) html += `<span class="chip" data-filtertag="" style="cursor:pointer;">絞り込み解除</span>`;
+    html += `</div>`;
+  }
+  html += `<div class="row" style="margin-bottom:8px;">
+    <button class="secondary" id="btnMergeSelected" disabled>選択した2件を統合</button>
+    <span class="small">統合したい研究を2件チェックする</span>
+  </div>`;
+  html += `<div style="overflow-x:auto;"><table class="data"><thead><tr><th></th><th>タイトル</th><th>自分側</th><th>タグ</th><th>開始</th><th>作成日</th><th></th></tr></thead><tbody>`;
+  list.slice().reverse().filter(r => !LIST_TAG_FILTER || (r.tags || []).includes(LIST_TAG_FILTER)).forEach(r => {
+    html += `<tr>
+      <td><input type="checkbox" data-selid="${r.id}"></td>
+      <td class="wrap">${r.title || "(無題)"}</td>
+      <td>${r.side==="S"?"先手側":r.side==="G"?"後手側":"未設定"}</td>
+      <td>${(r.tags||[]).map(t=>`<span class="chip">${t}</span>`).join("")}</td>
+      <td>${r.sourceNote}</td>
+      <td>${(r.createdAt||"").slice(0,10)}</td>
+      <td>
+        <button class="secondary" data-openid="${r.id}" style="padding:3px 8px; font-size:11px;">開く</button>
+        <button class="secondary" data-delid="${r.id}" style="padding:3px 8px; font-size:11px;">削除</button>
+      </td>
+    </tr>`;
+  });
+  html += `</tbody></table></div>`;
+  el.innerHTML = html;
+  el.querySelectorAll("[data-filtertag]").forEach(c => { c.onclick = () => { LIST_TAG_FILTER = c.dataset.filtertag || null; renderListTab(); }; });
+  const checkedIds = () => Array.from(el.querySelectorAll("[data-selid]")).filter(cb => cb.checked).map(cb => cb.dataset.selid);
+  const updateMergeBtn = () => { document.getElementById("btnMergeSelected").disabled = (checkedIds().length !== 2); };
+  el.querySelectorAll("[data-selid]").forEach(cb => { cb.onchange = updateMergeBtn; });
+  document.getElementById("btnMergeSelected").onclick = async () => {
+    const ids = checkedIds();
+    if (ids.length !== 2) return;
+    const fresh = loadResearches();
+    const picked = ids.map(id => fresh.find(r => String(r.id) === id)).filter(Boolean);
+    if (picked.length !== 2) return;
+    if (CURRENT && picked.some(r => r.id === CURRENT.id)) {
+      alert("編集画面で開いている研究は統合できない。先に編集画面で保存して閉じてから統合してほしい。");
+      return;
+    }
+    picked.sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+    const target = picked[0], source = picked[1]; // 古い方に新しい方を足す
+    const merged = mergeResearches(target, source);
+    if (!merged) {
+      alert("この2つは統合できない。片方の開始局面から、もう片方の全ての局面へ手順で辿れる関係である必要がある。");
+      return;
+    }
+    const ov = analyzeOverlap(target, source);
+    const line = ov.deepHash ? "\n共通の手順: " + sharedLineText(target, ov.deepHash) : "";
+    const msg = `「${target.title || "(無題)"}」に「${source.title || "(無題)"}」を統合する?\n共通局面: ${ov.shared}個${line}\n\n統合後は1つの研究にまとまり、元に戻せない。`;
+    if (!confirm(msg)) return;
+    const newList = fresh.filter(r => r.id !== source.id).map(r => r.id === merged.id ? merged : r);
+    await saveResearches(newList);
+    renderListTab();
+  };
+  el.querySelectorAll("[data-openid]").forEach(btn => {
+    btn.onclick = () => {
+      const list2 = loadResearches();
+      const found = list2.find(r => String(r.id)===btn.dataset.openid);
+      if (!found) return;
+      CURRENT = found; PATH = []; SELECTED = null;
+      switchTab("editor");
+    };
+  });
+  el.querySelectorAll("[data-delid]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm("この研究を削除する?")) return;
+      let list2 = loadResearches();
+      list2 = list2.filter(r => String(r.id)!==btn.dataset.delid);
+      await saveResearches(list2);
+      renderListTab();
+    };
+  });
+}
+
+/* ---------- タブ: 設定 ---------- */
+function renderSettingsTab() {
+  const el = document.getElementById("panel-settings");
+  el.innerHTML = `
+    <div class="card">
+      <div class="small" style="margin-bottom:8px; font-weight:700;">統合の確認</div>
+      <div class="small" style="margin-bottom:6px;">研究を保存する時、既存の研究と共通の局面がこの手数以降にあれば、統合するか確認する。<br>
+      (片方が丸ごともう片方に含まれる場合も確認する)</div>
+      <div class="row"><input type="number" id="mergeMinPlyInput" min="1" max="300" value="${mergeMinPly()}" style="width:80px;"> <span class="small">手目以降(初期値 ${MERGE_MIN_PLY_DEFAULT})</span></div>
+    </div>
+    <div class="card">
+      <div class="small" style="margin-bottom:8px; font-weight:700;">検討(AI)の表示</div>
+      <div class="row"><label style="display:inline; margin:0;"><input type="checkbox" id="engArrowChk" ${engArrowOn()?"checked":""} style="width:auto; display:inline-block;"> 検討の候補手を、盤の上に矢印で表示する</label></div>
+      <div class="row" style="margin-top:8px;"><span class="small">矢印の数</span>
+        <select id="engArrowNSel"><option value="1" ${engArrowN()===1?"selected":""}>1(最善手だけ)</option><option value="2" ${engArrowN()===2?"selected":""}>2</option><option value="3" ${engArrowN()===3?"selected":""}>3</option></select></div>
+      <div class="hint">このブラウザに保存される(端末ごとの設定)。</div>
+    </div>
+    <div class="card">
+      <div class="small" style="margin-bottom:8px;">データの管理</div>
+      <div class="row">
+        <button class="secondary" id="btnExport">全研究をJSONで書き出す</button>
+        <button class="secondary" id="btnImportJson">JSONから読み込む</button>
+        <input type="file" id="fileInput" accept="application/json" style="display:none;">
+      </div>
+    </div>
+  `;
+  document.getElementById("engArrowChk").onchange = (e) => { engSetArrowOn(e.target.checked); };
+  document.getElementById("engArrowNSel").onchange = (e) => { engSetArrowN(parseInt(e.target.value, 10)); };
+  document.getElementById("mergeMinPlyInput").onchange = (e) => {
+    const v = parseInt(e.target.value, 10);
+    if (v >= 1 && v <= 300) setMergeMinPly(v); else { alert("1〜300の数字で入れてほしい。"); e.target.value = mergeMinPly(); }
+  };
+  document.getElementById("btnExport").onclick = () => {
+    const data = { researches: loadResearches().map(packResearch) };
+    const blob = new Blob([JSON.stringify(data, null, 1)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "kenkyu_backup.json"; a.click();
+    URL.revokeObjectURL(url);
+  };
+  document.getElementById("btnImportJson").onclick = () => document.getElementById("fileInput").click();
+  document.getElementById("fileInput").onchange = (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      let data;
+      try { data = JSON.parse(reader.result); }
+      catch(err) { alert("読み込みに失敗した: " + err.message); return; }
+      if (data.researches) {
+        if (!confirm(`この操作は今クラウドに保存されている研究を、JSONファイルの内容で全部置き換える。よろしいか?`)) return;
+        const result = await saveResearches(data.researches.map(unpackResearch));
+        if (result && result.limitHit) {
+          alert("読み込んだが、無料プランの研究保存上限により一部は保存できなかった。");
+        } else {
+          alert("読み込んだ。");
+        }
+      }
+    };
+    reader.readAsText(file);
+  };
+}
+
+function switchTab(name) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab===name));
+  document.querySelectorAll(".panel").forEach(p => p.classList.toggle("active", p.id==="panel-"+name));
+  if (name==="editor") renderEditorTab();
+  if (name==="list") renderListTab();
+  if (name==="settings") renderSettingsTab();
+}
+document.querySelectorAll(".tab").forEach(t => { t.onclick = () => switchTab(t.dataset.tab); });
+
+/* ---------- 認証ゲート ---------- */
+let CURRENT_USER = null;
+let CURRENT_PROFILE = null;
+
+function renderLoginScreen() {
+  document.getElementById("appContainer").style.display = "none";
+  const gate = document.getElementById("authGate");
+  gate.style.display = "block";
+  document.getElementById("authGateCard").innerHTML = `
+    <div class="small" style="margin-bottom:10px;">Googleアカウントでログインして使う。</div>
+    <button id="btnGoogleLogin">Googleでログイン</button>
+  `;
+  document.getElementById("btnGoogleLogin").onclick = async () => {
+    try { await signInWithGoogle(); }
+    catch (e) { alert("ログインに失敗した: " + e.message); }
+  };
+}
+
+function renderAuthErrorScreen(message) {
+  document.getElementById("appContainer").style.display = "none";
+  const gate = document.getElementById("authGate");
+  gate.style.display = "block";
+  document.getElementById("authGateCard").innerHTML = `<div class="warn">${message}</div>`;
+}
+
+async function initApp() {
+  let session;
+  try { session = await getSession(); }
+  catch (e) { renderAuthErrorScreen("認証状態の確認に失敗した: " + e.message); return; }
+
+  if (!session) {
+    renderLoginScreen();
+    onAuthChange((s) => { if (s) location.reload(); });
+    return;
+  }
+
+  document.getElementById("authGate").style.display = "none";
+  document.getElementById("appContainer").style.display = "block";
+  document.getElementById("userEmailLabel").textContent = session.user.email || "";
+  document.getElementById("btnSignOut").onclick = async () => {
+    await signOut();
+    location.reload();
+  };
+
+  try {
+    CURRENT_USER = session.user;
+    CURRENT_PROFILE = await getProfile();
+    RESEARCHES_CACHE = await listResearches();
+    snapshotAll();
+    loadTagHints();
+  } catch (e) {
+    renderAuthErrorScreen("データの読み込みに失敗した: " + e.message);
+    return;
+  }
+
+  renderEditorTab();
+}
+
+/* =========================================================
+   検討エンジン(ベータ): やねうら王(WebAssembly・水匠内蔵) をこのページ内で動かす
+   ========================================================= */
+const ENG = { status: "off", on: false, eng: null, waiters: [], searching: false, dirty: false,
+  searchHash: null, cache: {}, err: "", secs: 10, threads: 1 };
+function engIsMobile() { return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && (navigator.maxTouchPoints || 0) > 1); }
+function engSupportProblem() {
+  if (typeof SharedArrayBuffer === "undefined" || window.crossOriginIsolated !== true) return "このブラウザ/端末では検討機能に必要な機能が使えません(PCのChrome・Safari・Firefox推奨)";
+  if (typeof WebAssembly === "undefined") return "WebAssemblyが使えません";
+  return "";
+}
+function engDefaultThreads() { const hc = navigator.hardwareConcurrency || 2; return Math.max(1, engIsMobile() ? Math.min(2, hc) : Math.min(4, hc)); }
+
+/* ---- 局面 → USI(SFEN) ---- */
+const SFEN_OF = { P:"P", L:"L", N:"N", S:"S", G:"G", B:"B", R:"R", K:"K", t:"+P", l:"+L", n:"+N", s:"+S", b:"+B", r:"+R" };
+function positionToSfen(node) {
+  const rows = [];
+  for (let r = 1; r <= 9; r++) {
+    let s = "", empty = 0;
+    for (let c = 9; c >= 1; c--) {
+      const cell = node.board[key(c, r)];
+      if (!cell) { empty++; continue; }
+      if (empty) { s += empty; empty = 0; }
+      const p = SFEN_OF[PIECE_CODE[cell[1]]];
+      s += cell[0] === "S" ? p : p.toLowerCase();
+    }
+    if (empty) s += empty;
+    rows.push(s);
+  }
+  let hs = "";
+  ["S", "G"].forEach(sd => {
+    const h = (node.hands && node.hands[sd]) || {};
+    ["R","B","G","S","N","L","P"].forEach(code => {
+      const n = h[code]; if (!n) return;
+      const ch = sd === "S" ? code : code.toLowerCase();
+      hs += (n > 1 ? n : "") + ch;
+    });
+  });
+  return rows.join("/") + " " + (node.turn === "S" ? "b" : "w") + " " + (hs || "-") + " 1";
+}
+
+/* ---- USIの指し手 → サイトの指し手 ---- */
+function usiToMove(board, hands, side, usi) {
+  let m;
+  const legal = legalMoves(board, hands, side);
+  if ((m = /^([PLNSGBR])\*([1-9])([a-i])$/.exec(usi))) {
+    const piece = CODE_TO_JP[m[1]], to = [+m[2], m[3].charCodeAt(0) - 96];
+    return legal.find(x => x.type === "drop" && x.piece === piece && x.to[0] === to[0] && x.to[1] === to[1]) || null;
+  }
+  if ((m = /^([1-9])([a-i])([1-9])([a-i])(\+?)$/.exec(usi))) {
+    const from = [+m[1], m[2].charCodeAt(0) - 96], to = [+m[3], m[4].charCodeAt(0) - 96], pr = m[5] === "+";
+    return legal.find(x => x.type === "move" && x.from[0] === from[0] && x.from[1] === from[1] && x.to[0] === to[0] && x.to[1] === to[1] && !!x.promote === pr) || null;
+  }
+  return null;
+}
+/* 読み筋(USIの手の並び)を「▲７六歩(77) △…」の文字にする。読めない手が出たらそこで打ち切る */
+function pvToText(node, pv, maxN) {
+  const b = cloneBoard(node.board), h = cloneHands(node.hands); let side = node.turn; const out = [];
+  for (const u of pv.slice(0, maxN || 8)) {
+    const mv = usiToMove(b, h, side, u); if (!mv) break;
+    out.push((side === "S" ? "▲" : "△") + moveToNotation(mv));
+    applyMoveObj(b, h, side, mv); side = side === "S" ? "G" : "S";
+  }
+  return out;
+}
+function engInfoParse(line) {
+  if (!line.startsWith("info ")) return null;
+  const t = line.trim().split(/\s+/); const r = { multipv: 1 };
+  for (let i = 1; i < t.length; i++) {
+    const k = t[i];
+    if (k === "depth") r.depth = +t[++i];
+    else if (k === "multipv") r.multipv = +t[++i];
+    else if (k === "nps") r.nps = +t[++i];
+    else if (k === "score") { const kind = t[++i]; const v = +t[++i]; if (kind !== "cp" && kind !== "mate") return null; r.score = { kind, v }; }
+    else if (k === "pv") { r.pv = t.slice(i + 1); break; }
+  }
+  if (r.depth == null || !r.score || !r.pv || !r.pv.length || isNaN(r.score.v)) return null;
+  return r;
+}
+/* 評価値は先手から見た表示にそろえる(エンジンは手番側から見た値を返す) */
+function engScoreText(score, turn) {
+  const sgn = turn === "S" ? 1 : -1, v = score.v * sgn;
+  if (score.kind === "mate") { const n = Math.abs(score.v); return (v > 0 ? "先手の" : "後手の") + n + "手詰め"; }
+  return (v > 0 ? "先手有利 +" : v < 0 ? "後手有利 " : "互角 ") + (v === 0 ? "0" : v);
+}
+
+/* ---- エンジンの起動と通信 ---- */
+function engSend(cmd) { ENG.eng.postMessage(cmd); }
+function engWait(prefix, ms) {
+  return new Promise((res, rej) => {
+    const to = setTimeout(() => rej(new Error(prefix + " が返ってきません")), ms);
+    ENG.waiters.push({ prefix, res: (l) => { clearTimeout(to); res(l); } });
+  });
+}
+function engLoadScript() {
+  return new Promise((res, rej) => {
+    if (typeof YaneuraOu_K_P === "function") return res();
+    const s = document.createElement("script"); s.src = "yaneuraou.k-p.js";
+    s.onload = () => (typeof YaneuraOu_K_P === "function" ? res() : rej(new Error("エンジンの読み込みに失敗")));
+    s.onerror = () => rej(new Error("エンジンのファイルが見つかりません"));
+    document.head.appendChild(s);
+  });
+}
+async function engBoot() {
+  ENG.status = "loading"; ENG.err = ""; engDraw();
+  try {
+    await engLoadScript();
+    ENG.eng = await YaneuraOu_K_P();
+    ENG.eng.addMessageListener(engOnLine);
+    engSend("usi"); await engWait("usiok", 30000);
+    ENG.threads = engDefaultThreads();
+    engSend("setoption name USI_Hash value " + (engIsMobile() ? 32 : 64));
+    engSend("setoption name Threads value " + ENG.threads);
+    engSend("setoption name MultiPV value 3");
+    engSend("isready"); await engWait("readyok", 60000);
+    engSend("usinewgame");
+    ENG.status = "ready";
+  } catch (e) {
+    ENG.status = "error"; ENG.err = (e && e.message) ? e.message : String(e); ENG.on = false;
+  }
+  engDraw();
+}
+function engOnLine(line) {
+  line = String(line);
+  ENG.waiters = ENG.waiters.filter(w => { if (line.startsWith(w.prefix)) { w.res(line); return false; } return true; });
+  if (line.startsWith("bestmove")) {
+    ENG.searching = false;
+    const c = ENG.cache[ENG.searchHash]; if (c) c.done = true;
+    if (ENG.dirty) { ENG.dirty = false; engStartIfNeeded(); } else engDraw();
+    return;
+  }
+  if (ENG.dirty) return; // 局面が変わった後に届く古い読み筋は捨てる
+  const r = engInfoParse(line); if (!r) return;
+  const c = ENG.cache[ENG.searchHash]; if (!c) return;
+  c.best[r.multipv] = r; engDraw();
+}
+function engStartIfNeeded() {
+  if (!ENG.on || ENG.status !== "ready" || !CURRENT) return;
+  const hash = currentHash(), node = currentNode();
+  if (ENG.cache[hash] && ENG.cache[hash].done && ENG.cache[hash].secs >= ENG.secs) { engDraw(); return; }
+  if (ENG.searching) { if (ENG.searchHash !== hash) { ENG.dirty = true; engSend("stop"); } return; }
+  if (legalMoves(node.board, node.hands, node.turn).length === 0) { ENG.cache[hash] = { best: {}, done: true, secs: ENG.secs, nomove: true }; engDraw(); return; }
+  ENG.cache[hash] = { best: {}, done: false, secs: ENG.secs, turn: node.turn };
+  ENG.searchHash = hash; ENG.searching = true;
+  engSend("position sfen " + positionToSfen(node));
+  engSend("go movetime " + (ENG.secs * 1000));
+  engDraw();
+}
+
+/* ---- 矢印 ---- */
+const LS_ARROW_ON = "kenkyu_eng_arrow", LS_ARROW_N = "kenkyu_eng_arrow_n";
+function engArrowOn() { try { return localStorage.getItem(LS_ARROW_ON) !== "0"; } catch (e) { return true; } }
+function engArrowN() { try { const v = parseInt(localStorage.getItem(LS_ARROW_N), 10); return v >= 1 && v <= 3 ? v : 3; } catch (e) { return 3; } }
+function engSetArrowOn(on) { try { localStorage.setItem(LS_ARROW_ON, on ? "1" : "0"); } catch (e) {} }
+function engSetArrowN(n) { try { localStorage.setItem(LS_ARROW_N, String(n)); } catch (e) {} }
+/* 始点(x1,y1)から終点(x2,y2)への矢印の形を計算する。線は終点の手前で止め、先端の三角を別に返す */
+function engArrowGeom(x1, y1, x2, y2, w) {
+  const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy);
+  if (len < 1) return null;
+  const ux = dx / len, uy = dy / len, head = Math.min(len * 0.5, w * 3.2), half = w * 1.7;
+  const bx = x2 - ux * head, by = y2 - uy * head;
+  return { line: [x1, y1, bx, by], head: [[x2, y2], [bx - uy * half, by + ux * half], [bx + uy * half, by - ux * half]] };
+}
+function engDrawArrows() {
+  const svg = document.getElementById("engArrows");
+  if (!svg || typeof svg.getBoundingClientRect !== "function") return;
+  svg.innerHTML = "";
+  if (!engArrowOn() || !ENG.on || ENG.status !== "ready" || !CURRENT) return;
+  const c = ENG.cache[currentHash()]; if (!c || c.nomove) return;
+  const wrap = document.getElementById("boardWrap"); if (!wrap) return;
+  const node = currentNode(), wr = wrap.getBoundingClientRect();
+  const centre = (col, row) => {
+    const td = wrap.querySelector('td[data-col="' + col + '"][data-row="' + row + '"]'); if (!td) return null;
+    const r = td.getBoundingClientRect(); return [r.left - wr.left + r.width / 2, r.top - wr.top + r.height / 2, r.width];
+  };
+  const styles = [{ w: 6, o: 0.85 }, { w: 4.5, o: 0.55 }, { w: 3.5, o: 0.4 }];
+  let out = "";
+  Object.keys(c.best).map(Number).sort((a, b) => a - b).slice(0, engArrowN()).forEach((k, i) => {
+    const r = c.best[k], mv = usiToMove(node.board, node.hands, node.turn, r.pv[0]); if (!mv) return;
+    const st = styles[i], to = centre(mv.to[0], mv.to[1]); if (!to) return;
+    if (mv.type === "drop") {
+      out += `<circle cx="${to[0]}" cy="${to[1]}" r="${to[2] * 0.42}" fill="none" stroke="#1b7f6b" stroke-width="${st.w * 0.7}" opacity="${st.o}"/>`;
+      return;
+    }
+    const from = centre(mv.from[0], mv.from[1]); if (!from) return;
+    const g = engArrowGeom(from[0], from[1], to[0], to[1], st.w); if (!g) return;
+    out += `<g opacity="${st.o}" fill="#1b7f6b" stroke="#1b7f6b"><line x1="${g.line[0]}" y1="${g.line[1]}" x2="${g.line[2]}" y2="${g.line[3]}" stroke-width="${st.w}" stroke-linecap="round"/>` +
+      `<polygon points="${g.head.map(p => p[0] + "," + p[1]).join(" ")}" stroke-width="1" stroke-linejoin="round"/></g>`;
+  });
+  svg.innerHTML = out;
+}
+function engDraw() { engDrawPanel(); engDrawArrows(); }
+window.addEventListener && window.addEventListener("resize", () => { try { engDrawArrows(); } catch (e) {} });
+
+/* ---- 画面 ---- */
+function engineSlotHTML() {
+  return `<div class="card" id="engCard" style="margin-top:12px; padding:10px;">
+    <div class="row">
+      <button id="btnEng">検討</button>
+      <select id="engSecs"><option value="3">3秒</option><option value="10">10秒</option><option value="30">30秒</option></select>
+      <span class="small" id="engStatus"></span>
+    </div>
+    <div id="engOut" style="margin-top:8px;"></div>
+    <div class="small" style="margin-top:8px; color:var(--sub);">検討機能は <a href="https://github.com/yaneurao/YaneuraOu" target="_blank" rel="noopener">やねうら王</a>(GPLv3)と水匠のWebAssembly版(<a href="https://www.npmjs.com/package/@mizarjp/yaneuraou.k-p" target="_blank" rel="noopener">配布元</a>)を利用しています。<a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener">GPLv3</a></div>
+  </div>`;
+}
+function engDrawPanel() {
+  const btn = document.getElementById("btnEng"), st = document.getElementById("engStatus"), out = document.getElementById("engOut");
+  if (!btn || !st || !out) return;
+  const problem = engSupportProblem();
+  const sel = document.getElementById("engSecs"); if (sel) sel.value = String(ENG.secs);
+  if (problem) { btn.disabled = true; btn.textContent = "検討"; st.textContent = problem; out.innerHTML = ""; return; }
+  btn.disabled = ENG.status === "loading";
+  btn.textContent = ENG.on ? "検討を止める" : "検討";
+  if (ENG.status === "loading") st.textContent = "エンジンを準備中…(初回は少し時間がかかります)";
+  else if (ENG.status === "error") st.textContent = "起動に失敗: " + ENG.err;
+  else if (ENG.on) st.textContent = ENG.searching ? "検討中…" : "検討済み";
+  else st.textContent = "";
+  out.innerHTML = "";
+  if (!ENG.on || ENG.status !== "ready" || !CURRENT) return;
+  const hash = currentHash(), node = currentNode(), c = ENG.cache[hash];
+  if (!c) return;
+  if (c.nomove) { out.innerHTML = `<div class="small">指せる手がありません。</div>`; return; }
+  const keys = Object.keys(c.best).map(Number).sort((a, b) => a - b);
+  if (!keys.length) { out.innerHTML = `<div class="small">読み込み中…</div>`; return; }
+  let html = "";
+  keys.forEach(k => {
+    const r = c.best[k], first = pvToText(node, r.pv, 8);
+    if (!first.length) return;
+    html += `<div class="edge-item" data-engmove="${r.pv[0]}" style="display:block;">
+      <div><b>${k}. ${first[0]}</b> <span class="small">${engScoreText(r.score, node.turn)} ・深さ${r.depth}</span></div>
+      <div class="small" style="word-break:break-all;">${first.join(" ")}</div></div>`;
+  });
+  html += `<div class="small" style="margin-top:4px;">候補をタップすると、その手を指します。</div>`;
+  out.innerHTML = html;
+  out.querySelectorAll("[data-engmove]").forEach(el => {
+    el.onclick = () => {
+      const n = currentNode(); const mv = usiToMove(n.board, n.hands, n.turn, el.dataset.engmove);
+      if (!mv) return; playMove(mv); renderEditorTab();
+    };
+  });
+}
+function engineAfterRender() {
+  const btn = document.getElementById("btnEng"); if (!btn) return;
+  btn.onclick = async () => {
+    if (ENG.on) { ENG.on = false; if (ENG.searching) { ENG.dirty = false; engSend("stop"); } engDraw(); return; }
+    ENG.on = true;
+    if (ENG.status === "off" || ENG.status === "error") { await engBoot(); if (ENG.status !== "ready") { engDraw(); return; } }
+    engStartIfNeeded(); engDraw();
+  };
+  const sel = document.getElementById("engSecs");
+  if (sel) sel.onchange = () => { ENG.secs = +sel.value; };
+  engDraw();
+  engStartIfNeeded();
+}
+
+initApp();
+</script>
+</body>
+</html>
