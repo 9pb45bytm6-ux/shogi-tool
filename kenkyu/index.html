@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;800&display=swap" rel="stylesheet" crossorigin="anonymous">
+<script type="text/javascript">window.coi = { coepCredentialless: () => false }; /* どのブラウザでも require-corp 方式にそろえる(Safariで不安定になるため) */</script>
 <script src="coi-serviceworker.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js" crossorigin="anonymous"></script>
 <style>
@@ -38,7 +39,7 @@
   .small { font-size: 12px; color: var(--sub); }
   .board-table { border-collapse: collapse; box-shadow: 0 2px 8px rgba(58,46,24,0.10); }
   .board-table td { width: 32px; height: 34px; border: 1px solid var(--board-line); background: var(--board-bg); text-align: center; font-size: 16px; font-weight: 700; font-family: serif; cursor: default; position: relative; }
-  .board-table .label { border: none; background: transparent; font-size: 11px; color: var(--sub); width: 20px; box-shadow: none; }
+  .board-table .label { border: none; background: transparent; font-size: 14px; font-weight: 700; color: var(--ink); width: 22px; box-shadow: none; }
   .board-table td.clickable { cursor: pointer; }
   .board-table td.selected { background: var(--select); }
   .board-table td.target { background: var(--highlight); }
@@ -2113,7 +2114,7 @@ function engDrawPanel() {
   if (!btn || !st || !out) return;
   const problem = engSupportProblem();
   const sel = document.getElementById("engSecs"); if (sel) sel.value = String(ENG.secs);
-  if (problem) { btn.disabled = true; btn.textContent = "検討"; st.textContent = problem; out.innerHTML = ""; return; }
+  if (problem) { btn.disabled = true; btn.textContent = "検討"; st.textContent = problem + " [isolated=" + window.crossOriginIsolated + ", SAB=" + (typeof SharedArrayBuffer) + "]"; out.innerHTML = ""; return; }
   btn.disabled = ENG.status === "loading";
   btn.textContent = ENG.on ? "検討を止める" : "検討";
   if (ENG.status === "loading") st.textContent = "エンジンを準備中…(初回は少し時間がかかります)";
