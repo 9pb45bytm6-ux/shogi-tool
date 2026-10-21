@@ -316,6 +316,10 @@ const ZEN2INT = {}; "１２３４５６７８９".split("").forEach((c,i)=>ZEN2I
 const KAN2INT = {}; "一二三四五六七八九".split("").forEach((c,i)=>KAN2INT[c]=i+1);
 const PIECE_CODE = {"歩":"P","香":"L","桂":"N","銀":"S","金":"G","角":"B","飛":"R","玉":"K","王":"K","と":"t","成香":"l","成桂":"n","成銀":"s","馬":"b","龍":"r","竜":"r"};
 const CODE_TO_JP = {P:"歩",L:"香",N:"桂",S:"銀",G:"金",B:"角",R:"飛",K:"玉",t:"と",l:"杏",n:"圭",s:"全",b:"馬",r:"龍"};
+const PROMOTED_OF_BASE = {"歩":"と","香":"成香","桂":"成桂","銀":"成銀","角":"馬","飛":"龍"};
+/* 盤の表示だけ、成香・成桂・成銀を1文字にする(2文字だとマスが縦に伸びるため) */
+const DISP_PIECE = {"成香":"杏","成桂":"圭","成銀":"全"};
+function dispPiece(n) { return DISP_PIECE[n] || n; }
 const BASE_OF_PROMOTED = {"と":"歩","成香":"香","成桂":"桂","成銀":"銀","馬":"角","龍":"飛","竜":"飛"};
 const HAND_ORDER = ["R","B","G","S","N","L","P"];
 const FILES = [9,8,7,6,5,4,3,2,1];
@@ -401,7 +405,8 @@ function applyMove(board, hands, turn, mv) {
       delete board[toKey];
     }
     delete board[fromKey];
-    board[toKey] = [turn, mv.piece];
+    // 「成」の手は、盤上の駒を成駒に入れ替える(すでに成駒の駒の動きはそのまま)
+    board[toKey] = [turn, mv.promote ? (PROMOTED_OF_BASE[mv.piece] || mv.piece) : mv.piece];
   }
 }
 
@@ -679,8 +684,8 @@ function renderBoardHTML(snap) {
       if (!cell) { html += `<td></td>`; }
       else {
         const [owner, piece] = cell;
-        if (owner === "G") html += `<td><span class="gote-piece">${piece}</span></td>`;
-        else html += `<td>${piece}</td>`;
+        if (owner === "G") html += `<td><span class="gote-piece">${dispPiece(piece)}</span></td>`;
+        else html += `<td>${dispPiece(piece)}</td>`;
       }
     });
     html += `</tr>`;
@@ -847,7 +852,13 @@ function renderTreeTab() {
   document.getElementById("btnSideG").onclick = () => { treeSide="G"; treePath=[]; renderTreeTab(); };
   document.getElementById("btnBranch").onclick = () => {
     const np = advanceToBranch(tree, treePath, getJumpThreshold());
-    if (np.length === treePath.length) { alert("ここが分岐点(これ以上、一本道ではない)。"); return; }
+    if (np.length === treePath.length) {
+      const cur = treePath.length ? treePath[treePath.length-1].hash : tree.root;
+      const node = tree.nodes[cur];
+      const total = node ? Object.values(node.edges).reduce((t,e)=>t+e.n,0) : 0;
+      alert(total < 2 ? "この先に分岐点はありません。" : "ここが分岐点です。");
+      return;
+    }
     treePath = np; renderTreeTab();
   };
   document.getElementById("crumbRoot").onclick = () => { treePath=[]; renderTreeTab(); };
