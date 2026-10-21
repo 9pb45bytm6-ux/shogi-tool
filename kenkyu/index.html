@@ -697,18 +697,22 @@ function renderBoardHTML(node) {
   return html;
 }
 
-/* 選択中の駒を素早く2回タップ(ダブルタップ)すると選択解除する */
-let LAST_TAP = { id: "", t: 0 };
-const DOUBLE_TAP_MS = 450;
-function isDoubleTapOnSelected(id, matchesSelected) {
-  const now = Date.now();
-  const dbl = matchesSelected && LAST_TAP.id === id && now - LAST_TAP.t <= DOUBLE_TAP_MS;
-  LAST_TAP = dbl ? { id: "", t: 0 } : { id, t: now };
-  return dbl;
+/* 選択を解除する操作: 選んだ駒をもう一度タップ / 盤面の外をタップ */
+const OUTSIDE_TAP_IGNORE = "input,textarea,select,button,a,label,[data-engmove],[data-edgekey],.crumbLink,#crumbRoot,.tab,[data-tab]";
+function outsideTapShouldDeselect(target) {
+  if (!SELECTED || !CURRENT || !target || typeof target.closest !== "function") return false;
+  if (target.closest("#boardWrap")) return false;      // 盤・駒台の中は、各マスの処理に任せる
+  if (target.closest(OUTSIDE_TAP_IGNORE)) return false; // ボタンや入力欄などは、それ自身の処理に任せる
+  return true;
+}
+if (typeof document !== "undefined" && document.addEventListener) {
+  document.addEventListener("click", (ev) => {
+    try { if (outsideTapShouldDeselect(ev.target)) { SELECTED = null; renderEditorTab(); } } catch (e) {}
+  }, true);
 }
 function onBoardCellClick(col, row) {
   const node = currentNode();
-  if (isDoubleTapOnSelected("b" + col + "," + row, !!SELECTED && SELECTED.type === "board" && SELECTED.from[0] === col && SELECTED.from[1] === row)) { SELECTED = null; renderEditorTab(); return; }
+  if (SELECTED && SELECTED.type === "board" && SELECTED.from[0] === col && SELECTED.from[1] === row) { SELECTED = null; renderEditorTab(); return; } // 選んだ駒をもう一度タップで解除
   const legal = legalMoves(node.board, node.hands, node.turn);
   // 選択中で、かつここがターゲットなら着手
   if (SELECTED) {
@@ -734,7 +738,7 @@ function onBoardCellClick(col, row) {
 function onHandClick(piece, side) {
   const node = currentNode();
   if (side !== node.turn) return;
-  if (isDoubleTapOnSelected("h" + side + piece, !!SELECTED && SELECTED.type === "hand" && SELECTED.piece === piece && SELECTED.side === side)) { SELECTED = null; renderEditorTab(); return; }
+  if (SELECTED && SELECTED.type === "hand" && SELECTED.piece === piece && SELECTED.side === side) { SELECTED = null; renderEditorTab(); return; } // 選んだ駒をもう一度タップで解除
   SELECTED = { type:"hand", piece, side };
   renderEditorTab();
 }
@@ -1625,7 +1629,7 @@ function renderEditorTab() {
 
   html += `<div style="min-width:220px; flex:1;">`;
   html += engineSlotHTML();
-  html += `<div class="small" style="font-weight:700; margin-bottom:6px;">${SELECTED?"移動先をタップ(選んだ駒をダブルタップで選択解除)":"駒か持ち駒をタップして手を選ぶ"}</div>`;
+  html += `<div class="small" style="font-weight:700; margin-bottom:6px;">${SELECTED?"移動先をタップ(選んだ駒をもう一度タップするか、盤の外をタップで選択解除)":"駒か持ち駒をタップして手を選ぶ"}</div>`;
   const edges = Object.values(node.edges);
   if (edges.length) {
     html += `<div class="small" style="font-weight:700; margin:10px 0 6px;">この局面から記録済みの手</div>`;
