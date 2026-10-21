@@ -70,6 +70,15 @@
   .tile { position: relative; display: inline-block; margin: 3px 3px; cursor: pointer; filter: drop-shadow(0 0 0.7px #6b5a2e) drop-shadow(0 0 0.7px #6b5a2e); }
   .tile .pc { display: block; width: 28px; padding: 7px 0 5px; text-align: center; background: #fdf3d8; font: 700 17px/1.1 serif; clip-path: polygon(50% 0, 92% 18%, 100% 100%, 0 100%, 8% 18%); }
   .tile.selected .pc { background: var(--select); }
+  .tile.disabled { opacity: 0.3; cursor: default; }
+  .engbar { margin: 0 0 8px; }
+  .engbar-text { font: 700 20px/1.3 sans-serif; margin-bottom: 4px; }
+  .engbar-text .m { font: 400 11px sans-serif; color: var(--sub); margin-left: 6px; }
+  .engbar-track { position: relative; display: flex; height: 18px; border: 1px solid #6b5a2e; border-radius: 9px; overflow: hidden; background: #fffdf9; }
+  .engbar-fill { background: #3a3226; transition: width .25s; }
+  .engbar-fill.off { background: #b9b2a3; }
+  .engbar-mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 0; border-left: 1px dashed #b98a4a; }
+  .engbar-lab { display: flex; justify-content: space-between; font-size: 11px; color: var(--sub); margin-top: 2px; }
   .tile.far .pc { transform: rotate(180deg); }
   .tile .n { position: absolute; top: -7px; right: -5px; font: 700 11px sans-serif; background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 0 4px; color: #333; }
 </style>
@@ -269,6 +278,9 @@ async function deleteResearch(researchId) {
    ========================================================= */
 const PIECE_CODE = {"歩":"P","香":"L","桂":"N","銀":"S","金":"G","角":"B","飛":"R","玉":"K","王":"K",
   "と":"t","成香":"l","成桂":"n","成銀":"s","馬":"b","龍":"r","竜":"r"};
+/* 盤・駒台の表示だけ、成香・成桂・成銀を1文字にする(2文字だとマスが縦に伸びるため) */
+const DISP_PIECE = {"成香":"杏","成桂":"圭","成銀":"全"};
+function dispPiece(n) { return DISP_PIECE[n] || n; }
 const CODE_TO_JP = {P:"歩",L:"香",N:"桂",S:"銀",G:"金",B:"角",R:"飛",K:"玉",t:"と",l:"成香",n:"成桂",s:"成銀",b:"馬",r:"龍"};
 const BASE_OF_PROMOTED = {"と":"歩","成香":"香","成桂":"桂","成銀":"銀","馬":"角","龍":"飛","竜":"飛"};
 const PROMOTED_OF_BASE = {"歩":"と","香":"成香","桂":"成桂","銀":"成銀","角":"馬","飛":"龍"};
@@ -631,13 +643,14 @@ function renderBoardHTML(node) {
       const n = h[code]; if (!n) return;
       const pieceName = CODE_TO_JP[code];
       const isSel = SELECTED && SELECTED.type==="hand" && SELECTED.piece===pieceName && SELECTED.side===side;
-      const cls = "hand-piece" + (isSel?" selected":"") + (!isMyTurn?" disabled":"");
-      html += `<span class="${cls}" data-hand="${pieceName}" data-side="${side}">${pieceName}${n>1?"×"+n:""}</span>`;
+      const cls = "tile" + (isSel?" selected":"") + (!isMyTurn?" disabled":"") + (side==="G"?" p-gote":"") + (side===topSide?" far":"");
+      html += `<span class="${cls}" data-hand="${pieceName}" data-side="${side}"><span class="pc">${dispPiece(pieceName)}</span>${n>1?`<span class="n">${n}</span>`:""}</span>`;
     });
     return html || `<span class="small">なし</span>`;
   };
   const files = flip ? FILES.slice().reverse() : FILES;
   let html = `<div id="boardWrap" style="display:inline-block; position:relative;">`;
+  html += `<div id="engBar" class="engbar"></div>`;
   html += `<div class="small" style="margin-bottom:4px;">${sideName(topSide)} 持駒: ${renderHand(topSide)}</div>`;
   html += `<table class="board-table"><tr>`;
   files.forEach(f => html += `<td class="label">${f}</td>`);
@@ -668,7 +681,7 @@ function renderBoardHTML(node) {
         const [owner, piece] = cell;
         const far = owner === topSide; // 向こう側の駒は逆向きに表示する
         const classes = [owner==="G" ? "p-gote" : "", far ? "p-far" : ""].filter(Boolean).join(" ");
-        content = classes ? `<span class="${classes}">${piece}</span>` : piece;
+        content = classes ? `<span class="${classes}">${dispPiece(piece)}</span>` : dispPiece(piece);
       }
       html += `<td class="${cls.trim()}" data-col="${col}" data-row="${row}">${content}</td>`;
     });
@@ -1124,12 +1137,12 @@ function renderPositionEditor() {
   else if (sel && sel.from === "hand") selText = `選択中: ${ownerName(sel.side)}の駒台の${CODE_TO_JP[sel.code]}。行き先をタップ`;
   const handTiles = (sd) => HAND_ORDER.filter(code => (E.hands[sd][code] || 0) > 0).map(code => {
     const n = E.hands[sd][code], on = sel && sel.from === "hand" && sel.side === sd && sel.code === code;
-    return `<span class="tile ${on?"selected":""} ${sd==="G"?"p-gote far":""}" data-hand="${sd}:${code}"><span class="pc">${CODE_TO_JP[code]}</span>${n>1?`<span class="n">${n}</span>`:""}</span>`;
+    return `<span class="tile ${on?"selected":""} ${sd==="G"?"p-gote far":""}" data-hand="${sd}:${code}"><span class="pc">${dispPiece(CODE_TO_JP[code])}</span>${n>1?`<span class="n">${n}</span>`:""}</span>`;
   }).join("");
   const handTray = (sd) => `<div class="tray" data-zone="${sd}">${handTiles(sd)}<span class="tray-badge ${sd==="S"?"s":""}">${ownerName(sd)}</span></div>`;
   const boxTiles = BOX_ORDER.filter(pc => bc[pc] > 0).map(pc => {
     const on = sel && sel.from === "box" && sel.piece === pc;
-    return `<span class="tile ${on?"selected":""}" data-box="${pc}"><span class="pc">${pc}</span>${bc[pc]>1?`<span class="n">${bc[pc]}</span>`:""}</span>`;
+    return `<span class="tile ${on?"selected":""}" data-box="${pc}"><span class="pc">${dispPiece(pc)}</span>${bc[pc]>1?`<span class="n">${bc[pc]}</span>`:""}</span>`;
   }).join("");
   html += `<div style="display:inline-block;">`;
   html += handTray(topSide);
@@ -1145,7 +1158,7 @@ function renderPositionEditor() {
       let content = "";
       if (cell) {
         const classes = [cell[0]==="G" ? "p-gote" : "", cell[0]===topSide ? "p-far" : ""].filter(Boolean).join(" ");
-        content = classes ? `<span class="${classes}">${cell[1]}</span>` : cell[1];
+        content = classes ? `<span class="${classes}">${dispPiece(cell[1])}</span>` : dispPiece(cell[1]);
       }
       html += `<td class="clickable ${isMoveSrc?"selected":""}" data-col="${col}" data-row="${row}">${content}</td>`;
     });
@@ -1788,6 +1801,7 @@ function renderSettingsTab() {
     <div class="card">
       <div class="small" style="margin-bottom:8px; font-weight:700;">検討(AI)の表示</div>
       <div class="row"><label style="display:inline; margin:0;"><input type="checkbox" id="engArrowChk" ${engArrowOn()?"checked":""} style="width:auto; display:inline-block;"> 検討の候補手を、盤の上に矢印で表示する</label></div>
+      <div class="row" style="margin-top:8px;"><label style="display:inline; margin:0;"><input type="checkbox" id="engBarChk" ${engBarOn()?"checked":""} style="width:auto; display:inline-block;"> 盤の上に、評価値の横棒(目安)を表示する</label></div>
       <div class="row" style="margin-top:8px;"><span class="small">矢印の数</span>
         <select id="engArrowNSel"><option value="1" ${engArrowN()===1?"selected":""}>1(最善手だけ)</option><option value="2" ${engArrowN()===2?"selected":""}>2</option><option value="3" ${engArrowN()===3?"selected":""}>3</option></select></div>
       <div class="hint">このブラウザに保存される(端末ごとの設定)。</div>
@@ -1802,6 +1816,7 @@ function renderSettingsTab() {
     </div>
   `;
   document.getElementById("engArrowChk").onchange = (e) => { engSetArrowOn(e.target.checked); };
+  document.getElementById("engBarChk").onchange = (e) => { engSetBarOn(e.target.checked); };
   document.getElementById("engArrowNSel").onchange = (e) => { engSetArrowN(parseInt(e.target.value, 10)); };
   document.getElementById("mergeMinPlyInput").onchange = (e) => {
     const v = parseInt(e.target.value, 10);
@@ -2058,6 +2073,30 @@ function engArrowOn() { try { return localStorage.getItem(LS_ARROW_ON) !== "0"; 
 function engArrowN() { try { const v = parseInt(localStorage.getItem(LS_ARROW_N), 10); return v >= 1 && v <= 3 ? v : 3; } catch (e) { return 3; } }
 function engSetArrowOn(on) { try { localStorage.setItem(LS_ARROW_ON, on ? "1" : "0"); } catch (e) {} }
 function engSetArrowN(n) { try { localStorage.setItem(LS_ARROW_N, String(n)); } catch (e) {} }
+/* ---- 評価値の横棒(先手が左、後手が右) ---- */
+const LS_BAR_ON = "kenkyu_eng_bar";
+function engBarOn() { try { return localStorage.getItem(LS_BAR_ON) !== "0"; } catch (e) { return true; } }
+function engSetBarOn(on) { try { localStorage.setItem(LS_BAR_ON, on ? "1" : "0"); } catch (e) {} }
+/* 先手の優勢度(0〜100)。評価値からの目安で、実際の勝率ではない */
+function engBarPercent(score, turn) {
+  const v = score.v * (turn === "S" ? 1 : -1);
+  if (score.kind === "mate") return v > 0 ? 100 : 0;
+  const p = 100 / (1 + Math.exp(-v / 600));
+  return Math.min(98, Math.max(2, p));
+}
+function engDrawBar() {
+  const el = document.getElementById("engBar"); if (!el) return;
+  el.innerHTML = "";
+  if (!engBarOn() || !ENG.on || ENG.status !== "ready" || !CURRENT) return;
+  const c = ENG.cache[currentHash()];
+  const r = c && c.best && c.best[1];
+  const node = currentNode();
+  const txt = r ? engScoreText(r.score, node.turn) : "—";
+  const pct = r ? engBarPercent(r.score, node.turn) : 50;
+  el.innerHTML = `<div class="engbar-text">${txt}<span class="m">(目安)</span></div>` +
+    `<div class="engbar-track"><div class="engbar-fill${r ? "" : " off"}" style="width:${pct.toFixed(1)}%"></div><div class="engbar-mid"></div></div>` +
+    `<div class="engbar-lab"><span>先手</span><span>後手</span></div>`;
+}
 /* 始点(x1,y1)から終点(x2,y2)への矢印の形を計算する。線は終点の手前で止め、先端の三角を別に返す */
 function engArrowGeom(x1, y1, x2, y2, w) {
   const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy);
@@ -2094,7 +2133,7 @@ function engDrawArrows() {
   });
   svg.innerHTML = out;
 }
-function engDraw() { engDrawPanel(); engDrawArrows(); }
+function engDraw() { engDrawPanel(); engDrawBar(); engDrawArrows(); }
 window.addEventListener && window.addEventListener("resize", () => { try { engDrawArrows(); } catch (e) {} });
 
 /* ---- 画面 ---- */
