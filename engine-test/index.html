@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>エンジン試験ページ</title>
+<title>エンジン試験ページ(確認用2)</title>
 <style>
   body { font-family: -apple-system, "Hiragino Sans", sans-serif; margin: 16px; line-height: 1.6; color: #222; max-width: 900px; }
   h1 { font-size: 20px; }
@@ -21,6 +21,7 @@
   label { margin-right: 12px; }
 </style>
 <!-- 1) GitHub Pagesでは自分でヘッダーを付けられないので、補助ファイルで代用する(初回だけ自動でリロードされる) -->
+<script type="text/javascript">window.coi = { coepCredentialless: () => false }; /* どのブラウザでも require-corp 方式にそろえる */</script>
 <script src="coi-serviceworker.js"></script>
 </head>
 <body>
@@ -89,6 +90,8 @@ function fmtScore(s) { return s.kind === "mate" ? "詰み " + (s.v > 0 ? "+" : "
   add("エンジンの読み込み(yaneuraou.k-p.js)", typeof YaneuraOu_K_P === "function", typeof YaneuraOu_K_P === "function" ? "" : "→ ファイルが無いか、読み込めていません。");
   $("env").innerHTML = rows.join("");
   $("env").insertAdjacentHTML("beforeend", `<div>CPUの論理コア数: ${navigator.hardwareConcurrency || "不明"} / ブラウザ: ${navigator.userAgent}</div>`);
+  $("env").insertAdjacentHTML("beforeend", `<div>補助ファイルの方式: require-corp に固定(今回の確認用)</div><div id="swinfo">補助ファイルの登録状況: 確認中…</div>`);
+  (async () => { try { const c = navigator.serviceWorker && navigator.serviceWorker.controller ? "このページを制御中" : "このページを制御していない"; const regs = navigator.serviceWorker ? await navigator.serviceWorker.getRegistrations() : []; $("swinfo").textContent = "補助ファイルの登録状況: " + c + " / 登録数 " + regs.length + " (" + regs.map(r => r.scope).join(", ") + ")"; } catch (e) { $("swinfo").textContent = "補助ファイルの登録状況: 取得失敗 " + e; } })();
   const sel = $("threads"); const max = Math.min(8, navigator.hardwareConcurrency || 2);
   for (let n = 1; n <= max; n++) { const o = document.createElement("option"); o.value = n; o.textContent = n; if (n === Math.min(4, max)) o.selected = true; sel.appendChild(o); }
 })();
