@@ -55,6 +55,21 @@
   .edge-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-radius: 7px; background: #fffdf9; border: 1px solid var(--border); cursor: pointer; margin-bottom: 6px; }
   .crumb { font-size: 13px; color: var(--sub); line-height: 1.8; margin-bottom: 10px; }
   .crumb a { color: var(--accent); cursor: pointer; font-weight: 600; }
+  .tree-scroll { overflow: auto; max-height: 340px; border: 1px solid var(--border); border-radius: 8px; background: #fffdf9; position: relative; }
+  .tree-canvas { position: relative; }
+  .tbox { position: absolute; box-sizing: border-box; height: 24px; line-height: 22px; padding: 0 4px; font-size: 11px; font-weight: 600; border-radius: 5px; border: 1px solid; white-space: nowrap; overflow: hidden; text-overflow: clip; cursor: pointer; text-align: center;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+  .tbox.s { background: #e6eef8; border-color: #7da0c8; color: #1f3d63; }
+  .tbox.g { background: #fbf0d4; border-color: #cfa447; color: #6b4a0e; }
+  .tbox.root { background: #efe6d2; border-color: #a98d5c; color: var(--ink); }
+  .tbox.mk { border-style: dashed; opacity: 0.75; }
+  .tbox.on { font-weight: 800; border-width: 2px; line-height: 20px; }
+  .tbox.cur { background: var(--select); border-color: #b9770e; color: #3a2a00; }
+  .tree-svg { position: absolute; left: 0; top: 0; pointer-events: none; }
+  .ctxmenu { position: fixed; z-index: 1000; background: #fff; border: 1px solid var(--accent); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.25); padding: 4px; min-width: 150px; }
+  .ctxmenu div { padding: 10px 14px; font-size: 14px; font-weight: 700; color: var(--lose); cursor: pointer; border-radius: 6px; }
+  .ctxmenu div:hover { background: #fbeee6; }
+  .edge-item, .crumbLink { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
   .flex-gap { display: flex; gap: 24px; flex-wrap: wrap; }
   .warn { background: #fbeee6; border: 1px solid #e3b898; color: #8a4a2e; padding: 8px 12px; border-radius: 8px; font-size: 12px; margin-bottom: 10px; }
   .tip { background: #f4f7ee; border: 1px solid #cfe0b6; color: #3d6b2e; padding: 8px 12px; border-radius: 8px; font-size: 12px; margin-bottom: 10px; }
@@ -698,7 +713,7 @@ function renderBoardHTML(node) {
 }
 
 /* 選択を解除する操作: 選んだ駒をもう一度タップ / 盤面の外をタップ */
-const OUTSIDE_TAP_IGNORE = "input,textarea,select,button,a,label,[data-engmove],[data-edgekey],.crumbLink,#crumbRoot,.tab,[data-tab]";
+const OUTSIDE_TAP_IGNORE = "input,textarea,select,button,a,label,[data-engmove],[data-edgekey],.crumbLink,#crumbRoot,.tab,[data-tab],.tbox,.ctxmenu";
 function outsideTapShouldDeselect(target) {
   if (!SELECTED || !CURRENT || !target || typeof target.closest !== "function") return false;
   if (target.closest("#boardWrap")) return false;      // 盤・駒台の中は、各マスの処理に任せる
@@ -858,6 +873,7 @@ function mergeResearches(target, source) {
     id: target.id, title: target.title || source.title, createdAt: target.createdAt,
     side: target.side || source.side || null, tags,
     sourceNote, rootPly, root, nodes, mergeDeclined: declined,
+    theme: [target.theme, source.theme].find(h => h && nodes[h]) || undefined,
   };
 }
 
@@ -903,6 +919,205 @@ function findPathTo(research, targetHash) {
   }
   return null;
 }
+
+/* ---------- テーマ図(しおり): 研究を開いたとき、この局面から始める ---------- */
+function themePath(r) {
+  if (!r || !r.theme || !r.nodes[r.theme]) return [];
+  return findPathTo(r, r.theme) || [];
+}
+function openResearch(r) { CURRENT = r; PATH = themePath(r); SELECTED = null; }
+
+/* ---------- ツリーダイアグラム(ShogiGUI風): 横=手数、縦=変化。本筋が一番上の段 ---------- */
+const TREE_W = 90, TREE_H = 24, TREE_DX = 106, TREE_DY = 30, TREE_PAD = 8;
+function moveShort(mv) {
+  let t = ZEN[mv.to[0]-1] + KAN[mv.to[1]-1] + mv.piece;
+  if (mv.type === "drop") return t + "打";
+  if (mv.promote) t += "成";
+  return t;
+}
+/* 研究(局面の網)を、ルートからの木に展開して座標を決める。
+   同じ局面に別の手順で合流する場合は、2回目以降は「合流」の印だけを置いて先は展開しない(爆発を防ぐ) */
+function treeLayout(research) {
+  const boxes = []; const seen = new Set(); let nextRow = 0, maxCol = 0;
+  function lay(hash, col, parent, mvKey, mv, mover, route) {
+    const b = { i: boxes.length, hash, col, row: 0, parent, mvKey, mv, mover, route, marker: false };
+    boxes.push(b); if (col > maxCol) maxCol = col;
+    if (seen.has(hash)) { b.marker = true; b.row = nextRow++; return b; }
+    seen.add(hash);
+    const n = research.nodes[hash];
+    const kids = n ? Object.keys(n.edges).filter(k => research.nodes[n.edges[k].to]) : [];
+    if (!kids.length) { b.row = nextRow++; return b; }
+    kids.forEach((k, idx) => {
+      const e = n.edges[k];
+      const c = lay(e.to, col + 1, b.i, k, e.mv, n.turn, route ? route + "|" + k : k);
+      if (idx === 0) b.row = c.row;
+    });
+    return b;
+  }
+  lay(research.root, 0, -1, null, null, null, "");
+  return { boxes, rows: nextRow, cols: maxCol + 1 };
+}
+function pathOfBox(boxes, i) {
+  const out = [];
+  for (let b = boxes[i]; b && b.parent >= 0; b = boxes[b.parent]) out.unshift({ mv: b.mv, hash: b.hash });
+  return out;
+}
+function treeHTML(research, L, pathKeys, curHash) {
+  const cur = pathKeys.join("|");
+  let curIdx = -1;
+  L.boxes.forEach(b => { if (b.route === cur) curIdx = b.i; });
+  if (curIdx < 0) { const f = L.boxes.find(b => b.hash === curHash && !b.marker); if (f) curIdx = f.i; }
+  const onPath = (b) => b.route === "" || cur === b.route || cur.indexOf(b.route + "|") === 0;
+  const X = (b) => TREE_PAD + b.col * TREE_DX, Y = (b) => TREE_PAD + b.row * TREE_DY;
+  const W = TREE_PAD * 2 + (L.cols - 1) * TREE_DX + TREE_W, H = TREE_PAD * 2 + (L.rows - 1) * TREE_DY + TREE_H;
+  let lines = "", boxes = "";
+  L.boxes.forEach(b => {
+    if (b.parent >= 0) {
+      const p = L.boxes[b.parent];
+      const x1 = X(p) + TREE_W, y1 = Y(p) + TREE_H / 2, x2 = X(b), y2 = Y(b) + TREE_H / 2;
+      const hot = onPath(b);
+      lines += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${hot ? "#b9770e" : "#b9a77c"}" stroke-width="${hot ? 2 : 1}"/>`;
+    }
+    const isTheme = research.theme && b.hash === research.theme && !b.marker;
+    const note = (research.nodes[b.hash].note || "").trim() ? "📝" : "";
+    let label, cls = "tbox";
+    if (b.parent < 0) { label = "開始"; cls += " root"; }
+    else { label = (b.marker ? "↪" : "") + (b.mover === "S" ? "▲" : "△") + moveShort(b.mv); cls += b.mover === "S" ? " s" : " g"; }
+    if (b.marker) cls += " mk";
+    if (onPath(b)) cls += " on";
+    if (b.i === curIdx) cls += " cur";
+    boxes += `<div class="${cls}" data-i="${b.i}" style="left:${X(b)}px;top:${Y(b)}px;width:${TREE_W}px;">${label}${note}${isTheme ? "★" : ""}</div>`;
+  });
+  return `<div class="tree-canvas" style="width:${W}px;height:${H}px;"><svg class="tree-svg" width="${W}" height="${H}">${lines}</svg>${boxes}</div>`;
+}
+
+/* ---------- 指した手の削除(その手より先の手順ごと)。別の手順で合流している局面は残す ---------- */
+function reachableSet(research, skipHash, skipKey) {
+  const seen = new Set([research.root]); const q = [research.root];
+  while (q.length) {
+    const h = q.pop(); const n = research.nodes[h]; if (!n) continue;
+    for (const k in n.edges) {
+      if (h === skipHash && k === skipKey) continue;
+      const to = n.edges[k].to;
+      if (research.nodes[to] && !seen.has(to)) { seen.add(to); q.push(to); }
+    }
+  }
+  return seen;
+}
+function deletionPlan(research, parentHash, mvKey) {
+  const pn = research.nodes[parentHash];
+  if (!pn || !pn.edges[mvKey]) return null;
+  const before = reachableSet(research, null, null), after = reachableSet(research, parentHash, mvKey);
+  const removed = Array.from(before).filter(h => !after.has(h));
+  const notes = removed.filter(h => (research.nodes[h].note || "").trim()).length;
+  return { parentHash, mvKey, removed, notes, themeLost: !!(research.theme && removed.indexOf(research.theme) >= 0) };
+}
+function applyDeletion(research, plan) {
+  const pn = research.nodes[plan.parentHash];
+  const entry = { research, parentHash: plan.parentHash, order: Object.keys(pn.edges), edge: pn.edges[plan.mvKey], mvKey: plan.mvKey,
+    nodes: {}, theme: research.theme, path: PATH.slice() };
+  delete pn.edges[plan.mvKey];
+  plan.removed.forEach(h => { entry.nodes[h] = research.nodes[h]; delete research.nodes[h]; });
+  if (plan.themeLost) delete research.theme;
+  return entry;
+}
+function undoDeletion(entry) {
+  const r = entry.research;
+  for (const h in entry.nodes) r.nodes[h] = entry.nodes[h];
+  const pn = r.nodes[entry.parentHash]; const old = pn.edges; const rebuilt = {};
+  entry.order.forEach(k => { rebuilt[k] = (k === entry.mvKey) ? entry.edge : old[k]; });
+  Object.keys(old).forEach(k => { if (!(k in rebuilt)) rebuilt[k] = old[k]; });
+  pn.edges = rebuilt;
+  if (entry.theme) r.theme = entry.theme;
+}
+function repairPath() { // 削除で消えた局面より先のPATHを切り詰める
+  let h = CURRENT.root; const out = [];
+  for (const p of PATH) {
+    const n = CURRENT.nodes[h]; const e = n && n.edges[JSON.stringify(p.mv)];
+    if (!e || !CURRENT.nodes[e.to]) break;
+    out.push(p); h = e.to;
+  }
+  PATH = out;
+}
+let UNDO_STACK = [];
+function lastUndo() { for (let i = UNDO_STACK.length - 1; i >= 0; i--) if (UNDO_STACK[i].research === CURRENT) return i; return -1; }
+function deleteMoveWithConfirm(parentHash, mvKey) {
+  if (!CURRENT) return false;
+  const plan = deletionPlan(CURRENT, parentHash, mvKey); if (!plan) return false;
+  const pn = CURRENT.nodes[parentHash]; const e = pn.edges[mvKey];
+  const name = (pn.turn === "S" ? "▲" : "△") + moveToNotation(e.mv);
+  let msg = `「${name}」を削除する?\n`;
+  if (plan.removed.length) msg += `この手より先の局面 ${plan.removed.length}個(メモ ${plan.notes}件)が消える。\n別の手順で合流している局面は残る。`;
+  else msg += `この手の先の局面は、別の手順でも到達できるので消えない(この手の記録だけが消える)。`;
+  if (plan.themeLost) msg += `\nテーマ図もこの先にあるため、解除される。`;
+  msg += `\n\n削除後は「削除を元に戻す」ボタンで戻せる。`;
+  if (!confirm(msg)) return false;
+  UNDO_STACK.push(applyDeletion(CURRENT, plan));
+  if (UNDO_STACK.length > 30) UNDO_STACK.shift();
+  repairPath(); SELECTED = null;
+  return true;
+}
+/* 右クリック/長押しで出す小さなメニュー(「この手を削除」) */
+function closeCtxMenu() { if (typeof document === "undefined" || !document.querySelectorAll) return; document.querySelectorAll(".ctxmenu").forEach(m => { if (m.remove) m.remove(); }); }
+function showCtxMenu(x, y, onDelete) {
+  closeCtxMenu();
+  const m = document.createElement("div"); m.className = "ctxmenu";
+  const item = document.createElement("div"); item.textContent = "🗑 この手を削除";
+  m.style.left = Math.max(4, Math.min(x, (window.innerWidth || 400) - 170)) + "px";
+  m.style.top = Math.max(4, Math.min(y, (window.innerHeight || 600) - 60)) + "px";
+  item.onclick = (ev) => { ev.stopPropagation(); closeCtxMenu(); onDelete(); };
+  m.appendChild(item); document.body.appendChild(m);
+}
+/* 要素から「削除対象の手(親局面+手のキー)」を求める */
+function moveTargetOf(el) {
+  if (!CURRENT || !el || typeof el.closest !== "function") return null;
+  const tb = el.closest(".tbox");
+  if (tb) { const b = TREE_BOXES[parseInt(tb.dataset.i, 10)]; if (b && b.parent >= 0) return { parentHash: TREE_BOXES[b.parent].hash, mvKey: b.mvKey }; return null; }
+  const ed = el.closest("[data-edgekey]");
+  if (ed) { const mv = JSON.parse(decodeURIComponent(ed.dataset.edgekey)); return { parentHash: currentHash(), mvKey: JSON.stringify(mv) }; }
+  const cl = el.closest(".crumbLink");
+  if (cl) { const k = parseInt(cl.dataset.idx, 10); return { parentHash: k - 1 === 0 ? CURRENT.root : PATH[k - 2].hash, mvKey: JSON.stringify(PATH[k - 1].mv) }; }
+  return null;
+}
+let TREE_BOXES = [];
+let TREE_OPEN = true; try { TREE_OPEN = localStorage.getItem("kenkyu_tree_open") !== "0"; } catch (e) {}
+let LP_LAST = 0;
+function askDeleteAt(el, x, y) {
+  const t = moveTargetOf(el); if (!t) return false;
+  showCtxMenu(x, y, () => { if (deleteMoveWithConfirm(t.parentHash, t.mvKey)) renderEditorTab(); });
+  return true;
+}
+(function setupMoveDeleteGestures() {
+  if (typeof document === "undefined" || !document.addEventListener) return;
+  let timer = null, sx = 0, sy = 0, tgt = null;
+  const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  document.addEventListener("contextmenu", (ev) => {
+    let t = null; try { t = moveTargetOf(ev.target); } catch (e) {}
+    if (!t) return;
+    ev.preventDefault();
+    if (Date.now() - LP_LAST < 900) return; // 長押しで既にメニューを出している
+    askDeleteAt(ev.target, ev.clientX, ev.clientY);
+  });
+  document.addEventListener("touchstart", (ev) => {
+    cancel(); if (!ev.touches || ev.touches.length !== 1) return;
+    let t = null; try { t = moveTargetOf(ev.target); } catch (e) {}
+    if (!t) return;
+    tgt = ev.target; sx = ev.touches[0].clientX; sy = ev.touches[0].clientY;
+    timer = setTimeout(() => { timer = null; LP_LAST = Date.now(); askDeleteAt(tgt, sx, sy + 14); }, 550);
+  }, { passive: true });
+  document.addEventListener("touchmove", (ev) => {
+    if (!timer || !ev.touches || !ev.touches[0]) return;
+    if (Math.abs(ev.touches[0].clientX - sx) > 10 || Math.abs(ev.touches[0].clientY - sy) > 10) cancel();
+  }, { passive: true });
+  document.addEventListener("touchend", cancel, { passive: true });
+  document.addEventListener("touchcancel", cancel, { passive: true });
+  document.addEventListener("click", (ev) => { // 長押しの指を離した時に出る「タップ」を無効にする(局面移動やメニュー選択の誤爆防止)
+    if (Date.now() - LP_LAST < 700) { ev.stopPropagation(); ev.preventDefault(); }
+  }, true);
+  document.addEventListener("click", (ev) => { // メニューの外をタップしたら閉じる
+    if (!(ev.target && ev.target.closest && ev.target.closest(".ctxmenu"))) closeCtxMenu();
+  });
+})();
 
 /* 確認ダイアログ用: 共通局面までの手順(直近8手まで、▲先手 △後手つき) */
 function sharedLineText(research, hash) {
@@ -1584,7 +1799,7 @@ function renderEditorTab() {
         const list = loadResearches();
         const found = list.find(r => String(r.id) === item.dataset.continueid);
         if (!found) return;
-        CURRENT = found; PATH = []; SELECTED = null;
+        openResearch(found);
         localStorage.removeItem(LS_HANDOFF);
         renderEditorTab();
       };
@@ -1618,6 +1833,15 @@ function renderEditorTab() {
   html += `<div class="crumb"><a id="crumbRoot">開始局面</a>`;
   PATH.forEach((p,i) => { html += ` &gt; <a class="crumbLink" data-idx="${i+1}">${moveToNotation(p.mv)}</a>`; });
   html += `</div>`;
+  {
+    const isTheme = CURRENT.theme && currentHash() === CURRENT.theme;
+    html += `<div class="row" style="margin-bottom:10px;">
+      <button class="secondary" id="btnSetTheme" style="padding:4px 12px; font-size:12px;">${isTheme ? "★ テーマ図を解除" : "☆ ここをテーマ図にする"}</button>`;
+    if (CURRENT.theme && CURRENT.nodes[CURRENT.theme] && !isTheme) html += `<button class="secondary" id="btnToTheme" style="padding:4px 12px; font-size:12px;">★ テーマ図へ</button>`;
+    if (PATH.length) html += `<button class="secondary" id="btnToRoot" style="padding:4px 12px; font-size:12px;">最初の局面に戻る</button>`;
+    if (lastUndo() >= 0) html += `<button class="secondary" id="btnUndoDel" style="padding:4px 12px; font-size:12px;">↩ 削除を元に戻す</button>`;
+    html += `<span class="small">${CURRENT.theme ? "次回から★の局面で開きます" : "設定すると、次回からこの局面で開きます"}</span></div>`;
+  }
 
   if (mated) html += `<div class="warn">この局面、手番(${node.turn==="S"?"先手":"後手"})の詰みです。</div>`;
   else if (inCheck) html += `<div class="warn">王手がかかっている。</div>`;
@@ -1642,6 +1866,17 @@ function renderEditorTab() {
   }
   html += `</div></div>`;
 
+  { // ツリーダイアグラム(盤の下。折りたためる)
+    const L = treeLayout(CURRENT); TREE_BOXES = L.boxes;
+    html += `<div class="card" id="treeCard" style="margin-top:12px;">
+      <div class="row" style="justify-content:space-between;"><span style="font-weight:700; font-size:13px;">ツリーダイアグラム <span class="small">(${countNodes(CURRENT)}局面)</span></span>
+      <button class="secondary" id="btnTreeToggle" style="padding:3px 10px; font-size:11px;">${TREE_OPEN ? "たたむ ▲" : "ひらく ▼"}</button></div>`;
+    if (TREE_OPEN) html += `<div class="small" style="margin:4px 0 6px;">手をタップでその局面へ移動 ／ 右クリック・長押しで「この手を削除」。青=先手 黄=後手 ★=テーマ図 ↪=別の手順で合流</div><div class="tree-scroll" id="treeScroll">${treeHTML(CURRENT, L, PATH.map(p => JSON.stringify(p.mv)), currentHash())}</div>`;
+    html += `</div>`;
+  }
+
+  const _ts = document.getElementById("treeScroll");
+  const _tsPos = _ts ? { l: _ts.scrollLeft, t: _ts.scrollTop } : null;
   el.innerHTML = html;
 
   el.querySelectorAll("td.clickable").forEach(td => {
@@ -1665,6 +1900,35 @@ function renderEditorTab() {
   });
   document.getElementById("sideSel").onchange = (e) => { CURRENT.side = e.target.value || null; CURRENT._flip = null; renderEditorTab(); };
   document.getElementById("btnFlip").onclick = () => { CURRENT._flip = !viewFlipped(); renderEditorTab(); };
+  document.getElementById("btnSetTheme").onclick = () => {
+    if (CURRENT.theme && currentHash() === CURRENT.theme) delete CURRENT.theme; else CURRENT.theme = currentHash();
+    renderEditorTab();
+  };
+  const bTT = document.getElementById("btnToTheme"); if (bTT) bTT.onclick = () => { PATH = themePath(CURRENT); SELECTED = null; renderEditorTab(); };
+  const bTR = document.getElementById("btnToRoot"); if (bTR) bTR.onclick = () => { PATH = []; SELECTED = null; renderEditorTab(); };
+  const bUD = document.getElementById("btnUndoDel"); if (bUD) bUD.onclick = () => {
+    const i = lastUndo(); if (i < 0) return;
+    const ent = UNDO_STACK.splice(i, 1)[0]; undoDeletion(ent);
+    PATH = ent.path.filter((p, k) => true); SELECTED = null; renderEditorTab();
+  };
+  const bTG = document.getElementById("btnTreeToggle"); if (bTG) bTG.onclick = () => {
+    TREE_OPEN = !TREE_OPEN; try { localStorage.setItem("kenkyu_tree_open", TREE_OPEN ? "1" : "0"); } catch (e) {}
+    renderEditorTab();
+  };
+  el.querySelectorAll(".tbox").forEach(b => {
+    b.onclick = () => { PATH = pathOfBox(TREE_BOXES, parseInt(b.dataset.i, 10)); SELECTED = null; renderEditorTab(); };
+  });
+  { const ts = document.getElementById("treeScroll");
+    if (ts) {
+      if (_tsPos) { ts.scrollLeft = _tsPos.l; ts.scrollTop = _tsPos.t; }
+      const cb = ts.querySelector ? ts.querySelector(".tbox.cur") : null;
+      if (cb && cb.offsetLeft !== undefined) { // 現在地の箱が見える範囲に入るようにずらす
+        if (cb.offsetLeft < ts.scrollLeft + 10) ts.scrollLeft = Math.max(0, cb.offsetLeft - 40);
+        else if (cb.offsetLeft + cb.offsetWidth > ts.scrollLeft + ts.clientWidth - 10) ts.scrollLeft = cb.offsetLeft + cb.offsetWidth - ts.clientWidth + 40;
+        if (cb.offsetTop < ts.scrollTop + 4) ts.scrollTop = Math.max(0, cb.offsetTop - 20);
+        else if (cb.offsetTop + cb.offsetHeight > ts.scrollTop + ts.clientHeight - 4) ts.scrollTop = cb.offsetTop + cb.offsetHeight - ts.clientHeight + 20;
+      }
+    } }
   renderTagArea();
   engineAfterRender();
   const noteBox = document.getElementById("noteBox");
@@ -1791,7 +2055,7 @@ function renderListTab() {
       const list2 = loadResearches();
       const found = list2.find(r => String(r.id)===btn.dataset.openid);
       if (!found) return;
-      CURRENT = found; PATH = []; SELECTED = null;
+      openResearch(found);
       switchTab("editor");
     };
   });
@@ -2163,7 +2427,7 @@ function engineSlotHTML() {
       <span class="small" id="engStatus"></span>
     </div>
     <div id="engOut" style="margin-top:8px;"></div>
-    <div class="small" style="margin-top:8px; color:var(--sub);">検討機能は <a href="https://github.com/yaneurao/YaneuraOu" target="_blank" rel="noopener">やねうら王</a>(GPLv3)と水匠のWebAssembly版(<a href="https://www.npmjs.com/package/@mizarjp/yaneuraou.k-p" target="_blank" rel="noopener">配布元</a>)を利用しています。<a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener">GPLv3</a></div>
+    <div class="small" style="margin-top:8px; color:var(--sub);">検討機能は <a href="https://github.com/yaneurao/YaneuraOu" target="_blank" rel="noopener">やねうら王</a>(GPLv3)のWebAssembly版 <a href="https://github.com/mizar/YaneuraOu.wasm" target="_blank" rel="noopener">mizar/YaneuraOu.wasm</a>(npm: <a href="https://www.npmjs.com/package/@mizarjp/yaneuraou.k-p" target="_blank" rel="noopener">@mizarjp/yaneuraou.k-p</a> で配布)と、それに内蔵された評価関数「水匠(SuishoPetite)」を利用しています。ライセンス: <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener">GPLv3</a></div>
   </div>`;
 }
 function engDrawPanel() {
