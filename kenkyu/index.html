@@ -55,7 +55,14 @@
   .edge-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-radius: 7px; background: #fffdf9; border: 1px solid var(--border); cursor: pointer; margin-bottom: 6px; }
   .crumb { font-size: 13px; color: var(--sub); line-height: 1.8; margin-bottom: 10px; }
   .crumb a { color: var(--accent); cursor: pointer; font-weight: 600; }
-  .tree-scroll { overflow: auto; max-height: 340px; border: 1px solid var(--border); border-radius: 8px; background: #fffdf9; position: relative; }
+  #panel-editor { overflow-anchor: none; }
+  .main-row { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .side-col { min-width: 220px; flex: 1; height: 480px; overflow-y: auto; }
+  @media (max-width: 700px) { .side-col { height: 340px; } }
+  .navrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; min-height: 34px; }
+  .slot { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; min-height: 34px; margin-bottom: 8px; }
+  .slot .warn, .slot .tip { margin: 0; }
+  .tree-scroll { overflow: auto; height: 240px; border: 1px solid var(--border); border-radius: 8px; background: #fffdf9; position: relative; }
   .tree-canvas { position: relative; }
   .tbox { position: absolute; box-sizing: border-box; height: 24px; line-height: 22px; padding: 0 4px; font-size: 11px; font-weight: 600; border-radius: 5px; border: 1px solid; white-space: nowrap; overflow: hidden; text-overflow: clip; cursor: pointer; text-align: center;
     -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
@@ -1039,6 +1046,31 @@ function repairPath() { // 削除で消えた局面より先のPATHを切り詰�
   }
   PATH = out;
 }
+/* ---------- 合流局面までスキップ: 指定の手を指して、合流局面・分岐・終端のどれかに着くまで進む ---------- */
+function incomingCounts(research) {
+  const reach = reachableSet(research, null, null); const cnt = {};
+  reach.forEach(h => { const n = research.nodes[h]; for (const k in n.edges) { const to = n.edges[k].to; if (research.nodes[to]) cnt[to] = (cnt[to] || 0) + 1; } });
+  return cnt;
+}
+function skipAlong(research, parentHash, mvKey) {
+  const pn = research.nodes[parentHash]; if (!pn || !pn.edges[mvKey]) return null;
+  const inc = incomingCounts(research); const path = []; const seen = new Set([parentHash]);
+  let e = pn.edges[mvKey], reason = "end";
+  for (;;) {
+    if (!research.nodes[e.to]) { reason = "end"; break; }
+    path.push({ mv: e.mv, hash: e.to });
+    if (seen.has(e.to)) { reason = "loop"; break; }
+    seen.add(e.to);
+    if ((inc[e.to] || 0) >= 2) { reason = "merge"; break; }
+    const n = research.nodes[e.to]; const kids = Object.keys(n.edges).filter(k => research.nodes[n.edges[k].to]);
+    if (kids.length === 0) { reason = "end"; break; }
+    if (kids.length >= 2) { reason = "branch"; break; }
+    e = n.edges[kids[0]];
+  }
+  return { path, reason };
+}
+const SKIP_TEXT = { merge: "合流局面で止まりました(別の手順でも着く局面)", branch: "分岐で止まりました(続きの手が2つ以上)", end: "この手順の終わりまで進みました", loop: "同じ局面に戻ったので止まりました" };
+let SKIP_MSG = "";
 let UNDO_STACK = [];
 function lastUndo() { for (let i = UNDO_STACK.length - 1; i >= 0; i--) if (UNDO_STACK[i].research === CURRENT) return i; return -1; }
 function deleteMoveWithConfirm(parentHash, mvKey) {
@@ -1118,6 +1150,26 @@ function askDeleteAt(el, x, y) {
     if (!(ev.target && ev.target.closest && ev.target.closest(".ctxmenu"))) closeCtxMenu();
   });
 })();
+
+/* キーボード: ← で1手戻る、→ で本筋(最初に記録した手)へ1手進む。入力欄の中では動かさない */
+function stepKey(dir) {
+  if (!CURRENT) return false;
+  if (dir < 0) { if (!PATH.length) return false; PATH = PATH.slice(0, -1); SELECTED = null; return true; }
+  const node = currentNode(); const k = Object.keys(node.edges).find(x => CURRENT.nodes[node.edges[x].to]);
+  if (!k) return false;
+  PATH.push({ mv: node.edges[k].mv, hash: node.edges[k].to }); SELECTED = null; return true;
+}
+if (typeof document !== "undefined" && document.addEventListener) {
+  document.addEventListener("keydown", (ev) => {
+    try {
+      if (!CURRENT || ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey) return;
+      if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
+      const t = ev.target; if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || "")) return;
+      const pn = document.getElementById("panel-editor"); if (pn && pn.classList && !pn.classList.contains("active")) return;
+      if (stepKey(ev.key === "ArrowLeft" ? -1 : 1)) { ev.preventDefault(); renderEditorTab(); }
+    } catch (e) {}
+  });
+}
 
 /* 確認ダイアログ用: 共通局面までの手順(直近8手まで、▲先手 △後手つき) */
 function sharedLineText(research, hash) {
@@ -1827,40 +1879,46 @@ function renderEditorTab() {
       </select>
       <button class="secondary" id="btnFlip" style="padding:3px 10px; font-size:11px;">盤を反転</button>
     </div>
-    <div style="margin-top:8px;" id="tagArea"></div>
+    <div style="margin-top:8px; min-height:34px;" id="tagArea"></div>
   </div>`;
 
-  html += `<div class="crumb"><a id="crumbRoot">開始局面</a>`;
-  PATH.forEach((p,i) => { html += ` &gt; <a class="crumbLink" data-idx="${i+1}">${moveToNotation(p.mv)}</a>`; });
-  html += `</div>`;
-  {
-    const isTheme = CURRENT.theme && currentHash() === CURRENT.theme;
-    html += `<div class="row" style="margin-bottom:10px;">
-      <button class="secondary" id="btnSetTheme" style="padding:4px 12px; font-size:12px;">${isTheme ? "★ テーマ図を解除" : "☆ ここをテーマ図にする"}</button>`;
-    if (CURRENT.theme && CURRENT.nodes[CURRENT.theme] && !isTheme) html += `<button class="secondary" id="btnToTheme" style="padding:4px 12px; font-size:12px;">★ テーマ図へ</button>`;
-    if (PATH.length) html += `<button class="secondary" id="btnToRoot" style="padding:4px 12px; font-size:12px;">最初の局面に戻る</button>`;
-    if (lastUndo() >= 0) html += `<button class="secondary" id="btnUndoDel" style="padding:4px 12px; font-size:12px;">↩ 削除を元に戻す</button>`;
-    html += `<span class="small">${CURRENT.theme ? "次回から★の局面で開きます" : "設定すると、次回からこの局面で開きます"}</span></div>`;
+  { // 操作行(ボタンの数は常に同じ。使えないものは薄くする。高さが変わらないようにするため)
+    const isTheme = !!(CURRENT.theme && currentHash() === CURRENT.theme);
+    const hasTheme = !!(CURRENT.theme && CURRENT.nodes[CURRENT.theme]);
+    const bs = `padding:4px 12px; font-size:12px;`;
+    html += `<div class="navrow" title="${CURRENT.theme ? "次回から★の局面で開きます" : "設定すると、次回からこの局面で開きます"}">
+      <button class="secondary" id="btnBack" style="${bs}" ${PATH.length ? "" : "disabled"}>◀ 1手戻る</button>
+      <button class="secondary" id="btnSetTheme" style="${bs}">${isTheme ? "★ テーマ図を解除" : "☆ ここをテーマ図にする"}</button>
+      <button class="secondary" id="btnToTheme" style="${bs}" ${hasTheme && !isTheme ? "" : "disabled"}>★ テーマ図へ</button>
+      <button class="secondary" id="btnToRoot" style="${bs}" ${PATH.length ? "" : "disabled"}>最初の局面へ</button>
+      <button class="secondary" id="btnUndoDel" style="${bs}" ${lastUndo() >= 0 ? "" : "disabled"}>↩ 削除を戻す</button>
+    </div>`;
   }
 
-  if (mated) html += `<div class="warn">この局面、手番(${node.turn==="S"?"先手":"後手"})の詰みです。</div>`;
-  else if (inCheck) html += `<div class="warn">王手がかかっている。</div>`;
+  { // メッセージ欄(高さ固定。王手・詰み・スキップの結果をここに出す)
+    let m = "";
+    if (SKIP_MSG) { m += `<div class="tip">⏭ ${SKIP_MSG}</div>`; SKIP_MSG = ""; }
+    if (mated) m += `<div class="warn">この局面、手番(${node.turn==="S"?"先手":"後手"})の詰みです。</div>`;
+    else if (inCheck) m += `<div class="warn">王手がかかっている。</div>`;
+    html += `<div class="slot">${m}</div>`;
+  }
 
-  html += `<div class="flex-gap"><div>`;
+  html += `<div class="main-row"><div>`;
   html += renderBoardHTML(node);
-  html += `<textarea id="noteBox" placeholder="この局面のメモ(フォーカスを外すと自動保存)" style="margin-top:8px; width:280px;">${node.note||""}</textarea>`;
+  html += `<textarea id="noteBox" placeholder="この局面のメモ(フォーカスを外すと自動保存)" style="margin-top:8px; display:block; width:310px; max-width:100%; box-sizing:border-box;">${node.note||""}</textarea>`;
   html += `</div>`;
 
-  html += `<div style="min-width:220px; flex:1;">`;
+  html += `<div class="side-col">`;
   html += engineSlotHTML();
   html += `<div class="small" style="font-weight:700; margin-bottom:6px;">${SELECTED?"移動先をタップ(選んだ駒をもう一度タップするか、盤の外をタップで選択解除)":"駒か持ち駒をタップして手を選ぶ"}</div>`;
   const edges = Object.values(node.edges);
-  if (edges.length) {
-    html += `<div class="small" style="font-weight:700; margin:10px 0 6px;">この局面から記録済みの手</div>`;
+  html += `<div class="small" style="font-weight:700; margin:10px 0 6px;">この局面から記録済みの手 <span style="font-weight:400;">(⏭=合流局面などまで一気に進む)</span></div>`;
+  if (!edges.length) html += `<div class="small">なし(盤で新しい手を指すと、ここに出ます)</div>`;
+  {
     edges.forEach(e => {
       html += `<div class="edge-item" data-edgekey="${encodeURIComponent(JSON.stringify(e.mv))}">
         <span>${moveToNotation(e.mv)}</span>
-        <span class="small">${CURRENT.nodes[e.to].note ? "📝" : ""}</span>
+        <span class="small">${CURRENT.nodes[e.to].note ? "📝" : ""} <button class="secondary" data-skip="${encodeURIComponent(JSON.stringify(e.mv))}" title="この手の先の合流局面・分岐・終端まで進む" style="padding:2px 10px; font-size:12px;">⏭ 先へ</button></span>
       </div>`;
     });
   }
@@ -1875,6 +1933,7 @@ function renderEditorTab() {
     html += `</div>`;
   }
 
+  const _sy = (typeof window !== "undefined" && window.scrollY) || 0;
   const _ts = document.getElementById("treeScroll");
   const _tsPos = _ts ? { l: _ts.scrollLeft, t: _ts.scrollTop } : null;
   el.innerHTML = html;
@@ -1886,9 +1945,14 @@ function renderEditorTab() {
     if (span.classList.contains("disabled")) return;
     span.onclick = () => onHandClick(span.dataset.hand, span.dataset.side);
   });
-  document.getElementById("crumbRoot").onclick = () => { PATH=[]; SELECTED=null; renderEditorTab(); };
-  el.querySelectorAll(".crumbLink").forEach(a => {
-    a.onclick = () => { PATH = PATH.slice(0, parseInt(a.dataset.idx,10)); SELECTED=null; renderEditorTab(); };
+  document.getElementById("btnBack").onclick = () => { if (PATH.length) { PATH = PATH.slice(0, -1); SELECTED = null; renderEditorTab(); } };
+  el.querySelectorAll("[data-skip]").forEach(btn => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const mv = JSON.parse(decodeURIComponent(btn.dataset.skip));
+      const r = skipAlong(CURRENT, currentHash(), JSON.stringify(mv)); if (!r) return;
+      PATH = PATH.concat(r.path); SELECTED = null; SKIP_MSG = SKIP_TEXT[r.reason] + `(${r.path.length}手進んだ)`; renderEditorTab();
+    };
   });
   el.querySelectorAll("[data-edgekey]").forEach(item => {
     item.onclick = () => {
@@ -1931,6 +1995,7 @@ function renderEditorTab() {
     } }
   renderTagArea();
   engineAfterRender();
+  if (typeof window !== "undefined" && window.scrollTo && window.scrollY !== _sy) window.scrollTo(0, _sy); // 描き直しで高さが一瞬変わっても、見ている位置を保つ(タグ欄・検討欄は描き直しの後に中身が入るので、最後に戻す)
   const noteBox = document.getElementById("noteBox");
   if (noteBox) noteBox.onblur = (e) => { currentNode().note = e.target.value; };
   document.getElementById("titleInput").oninput = (e) => { CURRENT.title = e.target.value; };
