@@ -74,7 +74,9 @@
   .tbox.cur { background: var(--select); border-color: #b9770e; color: #3a2a00; }
   .tree-svg { position: absolute; left: 0; top: 0; pointer-events: none; }
   .ctxmenu { position: fixed; z-index: 1000; background: #fff; border: 1px solid var(--accent); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.25); padding: 4px; min-width: 150px; }
-  .ctxmenu div { padding: 10px 14px; font-size: 14px; font-weight: 700; color: var(--lose); cursor: pointer; border-radius: 6px; }
+  .ctxmenu div { padding: 10px 14px; font-size: 14px; font-weight: 700; color: var(--ink); cursor: pointer; border-radius: 6px; }
+  .ctxmenu div.danger { color: var(--lose); }
+  .edge-item:hover { background: #f6ecd6; }
   .ctxmenu div:hover { background: #fbeee6; }
   .edge-item, .crumbLink { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
   .flex-gap { display: flex; gap: 24px; flex-wrap: wrap; }
@@ -502,6 +504,30 @@ function decodeStateCompact(h) {
 }
 /* 保存用: 各局面の board/hands/turn は局面ハッシュ(ノードのキー)から復元できるので落とす。
    "_" で始まるキーは画面専用の一時値なので保存しない。 */
+/* 手の識別キー。DB(jsonb)は、オブジェクトの項目の並びを変えて返すので、JSON.stringify(mv) をそのままキーにすると、
+   DBから読み込んだ研究で「同じ手なのにキーが違う」ことになる。並びに左右されない形に固定する。 */
+function mvKeyOf(mv) { return JSON.stringify([mv.type, mv.from || null, mv.to, mv.piece, mv.promote ? 1 : 0]); }
+/* 局面から出る手のキーを、表示順(先頭=本筋)に並べて返す。node.order に保存された順を優先し、無いものは後ろに足す */
+function edgeKeys(node) {
+  const keys = Object.keys(node.edges);
+  if (!node.order || !node.order.length) return keys;
+  const set = new Set(keys); const out = node.order.filter(k => set.has(k)); const have = new Set(out);
+  keys.forEach(k => { if (!have.has(k)) out.push(k); });
+  return out;
+}
+function moveEdge(research, parentHash, key, newIndex) { // 同じ局面から出る手の並びを変える(newIndex=0が本筋)
+  const n = research.nodes[parentHash]; if (!n || !n.edges[key]) return false;
+  const keys = edgeKeys(n).filter(k => k !== key);
+  keys.splice(Math.max(0, Math.min(keys.length, newIndex)), 0, key);
+  n.order = keys; return true;
+}
+/* 古い保存データのキー(手の項目の並びがバラバラ)を、固定の形に直す */
+function normalizeEdges(n) {
+  const e2 = {}, map = {};
+  Object.keys(n.edges || {}).forEach(k => { const e = n.edges[k]; if (!e || !e.mv) return; const nk = mvKeyOf(e.mv); map[k] = nk; if (!e2[nk]) e2[nk] = e; });
+  n.edges = e2;
+  if (n.order) n.order = n.order.map(k => map[k] || k).filter((k, i, a) => a.indexOf(k) === i);
+}
 function packResearch(r) {
   const out = {};
   for (const k in r) { if (k[0] === "_" || k === "nodes") continue; out[k] = r[k]; }
@@ -509,6 +535,7 @@ function packResearch(r) {
   for (const h in r.nodes) {
     const n = r.nodes[h];
     out.nodes[h] = { edges: n.edges, note: n.note || "" };
+    if (n.order && Object.keys(n.edges).length > 1) out.nodes[h].order = edgeKeys(n);
   }
   return out;
 }
@@ -517,9 +544,11 @@ function unpackResearch(data) {
   r.nodes = {};
   for (const h in data.nodes) {
     const n = data.nodes[h];
-    if (n.board) { r.nodes[h] = n; continue; } // 旧形式(盤面つき)もそのまま読める
+    if (n.board) { r.nodes[h] = n; normalizeEdges(n); continue; } // 旧形式(盤面つき)もそのまま読める
     const st = decodeStateCompact(h);
     r.nodes[h] = { board: st.board, hands: st.hands, turn: st.turn, edges: n.edges || {}, note: n.note || "" };
+    if (n.order) r.nodes[h].order = n.order.slice();
+    normalizeEdges(r.nodes[h]);
   }
   return r;
 }
@@ -643,7 +672,7 @@ function playMove(mv) {
   if (!CURRENT.nodes[newHash]) {
     CURRENT.nodes[newHash] = { board: b2, hands: h2, turn: nextTurn, edges:{}, note:"" };
   }
-  const mvKey = JSON.stringify(mv);
+  const mvKey = mvKeyOf(mv);
   node.edges[mvKey] = { mv, to: newHash };
   PATH.push({ mv, hash: newHash });
   SELECTED = null;
@@ -779,6 +808,9 @@ function findMatchingResearches(rootHash) {
 const MERGE_MIN_PLY_DEFAULT = 35;
 const LS_MERGE_MIN_PLY = "kenkyu_merge_min_ply";
 const CONTAIN_MIN_STEPS = 10;
+const LS_MERGE_CONFIRM = "kenkyu_merge_confirm";
+function mergeConfirmOn() { try { return localStorage.getItem(LS_MERGE_CONFIRM) !== "0"; } catch (e) { return true; } }
+function setMergeConfirmOn(v) { try { localStorage.setItem(LS_MERGE_CONFIRM, v ? "1" : "0"); } catch (e) {} }
 function mergeMinPly() {
   try {
     const v = parseInt(localStorage.getItem(LS_MERGE_MIN_PLY), 10);
@@ -855,7 +887,7 @@ function analyzeOverlap(a, b) {
 /* target に source を足した統合結果を返す。ルートから全局面に辿れない場合は null */
 function mergeResearches(target, source) {
   const nodes = {};
-  const cloneNode = (n) => ({ board: n.board, hands: n.hands, turn: n.turn, edges: Object.assign({}, n.edges), note: n.note || "" });
+  const cloneNode = (n) => { const c = { board: n.board, hands: n.hands, turn: n.turn, edges: Object.assign({}, n.edges), note: n.note || "" }; if (n.order) c.order = n.order.slice(); return c; };
   for (const h in target.nodes) nodes[h] = cloneNode(target.nodes[h]);
   for (const h in source.nodes) {
     const sn = source.nodes[h];
@@ -886,6 +918,7 @@ function mergeResearches(target, source) {
 
 /* cur と重なっている保存済み研究を、深い順に返す。reason は確認ダイアログに出す理由 */
 function findMergeCandidates(cur, list) {
+  if (!mergeConfirmOn()) return []; // 設定で「統合を確認しない」にしている時は聞かない
   const out = [];
   const minPly = mergeMinPly();
   list.forEach(r => {
@@ -952,7 +985,7 @@ function treeLayout(research) {
     if (seen.has(hash)) { b.marker = true; b.row = nextRow++; return b; }
     seen.add(hash);
     const n = research.nodes[hash];
-    const kids = n ? Object.keys(n.edges).filter(k => research.nodes[n.edges[k].to]) : [];
+    const kids = n ? edgeKeys(n).filter(k => research.nodes[n.edges[k].to]) : [];
     if (!kids.length) { b.row = nextRow++; return b; }
     kids.forEach((k, idx) => {
       const e = n.edges[k];
@@ -1021,7 +1054,8 @@ function deletionPlan(research, parentHash, mvKey) {
 }
 function applyDeletion(research, plan) {
   const pn = research.nodes[plan.parentHash];
-  const entry = { research, parentHash: plan.parentHash, order: Object.keys(pn.edges), edge: pn.edges[plan.mvKey], mvKey: plan.mvKey,
+  if (!pn.order) pn.order = Object.keys(pn.edges);
+  const entry = { research, parentHash: plan.parentHash, order: edgeKeys(pn), edge: pn.edges[plan.mvKey], mvKey: plan.mvKey,
     nodes: {}, theme: research.theme, path: PATH.slice() };
   delete pn.edges[plan.mvKey];
   plan.removed.forEach(h => { entry.nodes[h] = research.nodes[h]; delete research.nodes[h]; });
@@ -1034,43 +1068,18 @@ function undoDeletion(entry) {
   const pn = r.nodes[entry.parentHash]; const old = pn.edges; const rebuilt = {};
   entry.order.forEach(k => { rebuilt[k] = (k === entry.mvKey) ? entry.edge : old[k]; });
   Object.keys(old).forEach(k => { if (!(k in rebuilt)) rebuilt[k] = old[k]; });
-  pn.edges = rebuilt;
+  pn.edges = rebuilt; pn.order = entry.order.slice();
   if (entry.theme) r.theme = entry.theme;
 }
 function repairPath() { // 削除で消えた局面より先のPATHを切り詰める
   let h = CURRENT.root; const out = [];
   for (const p of PATH) {
-    const n = CURRENT.nodes[h]; const e = n && n.edges[JSON.stringify(p.mv)];
+    const n = CURRENT.nodes[h]; const e = n && n.edges[mvKeyOf(p.mv)];
     if (!e || !CURRENT.nodes[e.to]) break;
     out.push(p); h = e.to;
   }
   PATH = out;
 }
-/* ---------- 合流局面までスキップ: 指定の手を指して、合流局面・分岐・終端のどれかに着くまで進む ---------- */
-function incomingCounts(research) {
-  const reach = reachableSet(research, null, null); const cnt = {};
-  reach.forEach(h => { const n = research.nodes[h]; for (const k in n.edges) { const to = n.edges[k].to; if (research.nodes[to]) cnt[to] = (cnt[to] || 0) + 1; } });
-  return cnt;
-}
-function skipAlong(research, parentHash, mvKey) {
-  const pn = research.nodes[parentHash]; if (!pn || !pn.edges[mvKey]) return null;
-  const inc = incomingCounts(research); const path = []; const seen = new Set([parentHash]);
-  let e = pn.edges[mvKey], reason = "end";
-  for (;;) {
-    if (!research.nodes[e.to]) { reason = "end"; break; }
-    path.push({ mv: e.mv, hash: e.to });
-    if (seen.has(e.to)) { reason = "loop"; break; }
-    seen.add(e.to);
-    if ((inc[e.to] || 0) >= 2) { reason = "merge"; break; }
-    const n = research.nodes[e.to]; const kids = Object.keys(n.edges).filter(k => research.nodes[n.edges[k].to]);
-    if (kids.length === 0) { reason = "end"; break; }
-    if (kids.length >= 2) { reason = "branch"; break; }
-    e = n.edges[kids[0]];
-  }
-  return { path, reason };
-}
-const SKIP_TEXT = { merge: "合流局面で止まりました(別の手順でも着く局面)", branch: "分岐で止まりました(続きの手が2つ以上)", end: "この手順の終わりまで進みました", loop: "同じ局面に戻ったので止まりました" };
-let SKIP_MSG = "";
 let UNDO_STACK = [];
 function lastUndo() { for (let i = UNDO_STACK.length - 1; i >= 0; i--) if (UNDO_STACK[i].research === CURRENT) return i; return -1; }
 function deleteMoveWithConfirm(parentHash, mvKey) {
@@ -1091,33 +1100,72 @@ function deleteMoveWithConfirm(parentHash, mvKey) {
 }
 /* 右クリック/長押しで出す小さなメニュー(「この手を削除」) */
 function closeCtxMenu() { if (typeof document === "undefined" || !document.querySelectorAll) return; document.querySelectorAll(".ctxmenu").forEach(m => { if (m.remove) m.remove(); }); }
-function showCtxMenu(x, y, onDelete) {
+function showCtxMenu(x, y, items) {
   closeCtxMenu();
   const m = document.createElement("div"); m.className = "ctxmenu";
-  const item = document.createElement("div"); item.textContent = "🗑 この手を削除";
-  m.style.left = Math.max(4, Math.min(x, (window.innerWidth || 400) - 170)) + "px";
-  m.style.top = Math.max(4, Math.min(y, (window.innerHeight || 600) - 60)) + "px";
-  item.onclick = (ev) => { ev.stopPropagation(); closeCtxMenu(); onDelete(); };
-  m.appendChild(item); document.body.appendChild(m);
+  m.style.left = Math.max(4, Math.min(x, (window.innerWidth || 400) - 190)) + "px";
+  m.style.top = Math.max(4, Math.min(y, (window.innerHeight || 600) - (items.length * 44 + 12))) + "px";
+  items.forEach(it => {
+    const item = document.createElement("div"); item.textContent = it.label; if (it.danger) item.className = "danger";
+    item.onclick = (ev) => { ev.stopPropagation(); closeCtxMenu(); it.fn(); };
+    m.appendChild(item);
+  });
+  document.body.appendChild(m);
 }
-/* 要素から「削除対象の手(親局面+手のキー)」を求める */
+/* 要素から「対象の手(親局面+手のキー)」を求める */
 function moveTargetOf(el) {
   if (!CURRENT || !el || typeof el.closest !== "function") return null;
   const tb = el.closest(".tbox");
   if (tb) { const b = TREE_BOXES[parseInt(tb.dataset.i, 10)]; if (b && b.parent >= 0) return { parentHash: TREE_BOXES[b.parent].hash, mvKey: b.mvKey }; return null; }
   const ed = el.closest("[data-edgekey]");
-  if (ed) { const mv = JSON.parse(decodeURIComponent(ed.dataset.edgekey)); return { parentHash: currentHash(), mvKey: JSON.stringify(mv) }; }
-  const cl = el.closest(".crumbLink");
-  if (cl) { const k = parseInt(cl.dataset.idx, 10); return { parentHash: k - 1 === 0 ? CURRENT.root : PATH[k - 2].hash, mvKey: JSON.stringify(PATH[k - 1].mv) }; }
+  if (ed) return { parentHash: currentHash(), mvKey: decodeURIComponent(ed.dataset.edgekey) };
   return null;
 }
 let TREE_BOXES = [];
 let TREE_OPEN = true; try { TREE_OPEN = localStorage.getItem("kenkyu_tree_open") !== "0"; } catch (e) {}
 let LP_LAST = 0;
+function moveMenuItems(t) {
+  const pn = CURRENT.nodes[t.parentHash]; if (!pn) return [];
+  const keys = edgeKeys(pn); const i = keys.indexOf(t.mvKey); const items = [];
+  const go = (idx) => () => { moveEdge(CURRENT, t.parentHash, t.mvKey, idx); renderEditorTab(); };
+  if (i > 0) items.push({ label: "⭐ 本筋にする", fn: go(0) });
+  if (i > 1) items.push({ label: "▲ 1つ上へ", fn: go(i - 1) });
+  if (i >= 0 && i < keys.length - 1) items.push({ label: "▼ 1つ下へ", fn: go(i + 1) });
+  items.push({ label: "🗑 この手を削除", danger: true, fn: () => { if (deleteMoveWithConfirm(t.parentHash, t.mvKey)) renderEditorTab(); } });
+  return items;
+}
 function askDeleteAt(el, x, y) {
   const t = moveTargetOf(el); if (!t) return false;
-  showCtxMenu(x, y, () => { if (deleteMoveWithConfirm(t.parentHash, t.mvKey)) renderEditorTab(); });
+  showCtxMenu(x, y, moveMenuItems(t));
   return true;
+}
+let DRAG_CLICK_BLOCK = 0;
+/* パソコン: ツリーの箱を上下にドラッグして、同じ分岐から出る手の並びを変える(一番上が本筋) */
+function setupTreeDrag(root) {
+  root.querySelectorAll(".tbox").forEach(bx => {
+    const b = TREE_BOXES[parseInt(bx.dataset.i, 10)]; if (!b || b.parent < 0) return;
+    bx.addEventListener("pointerdown", (ev) => {
+      if (ev.pointerType === "touch" || ev.button !== 0) return;
+      const sy = ev.clientY; let dragging = false;
+      const move = (e2) => {
+        const dy = e2.clientY - sy;
+        if (!dragging && Math.abs(dy) > 6) { dragging = true; bx.style.zIndex = 5; bx.style.opacity = "0.7"; }
+        if (dragging) bx.style.transform = `translateY(${dy}px)`;
+      };
+      const up = (e2) => {
+        document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up);
+        if (!dragging) return;
+        DRAG_CLICK_BLOCK = Date.now();
+        let idx = 0;
+        TREE_BOXES.filter(x => x.parent === b.parent && x.i !== b.i).forEach(sb => {
+          const el2 = root.querySelector('.tbox[data-i="' + sb.i + '"]'); if (!el2) return;
+          const r = el2.getBoundingClientRect(); if (e2.clientY > r.top + r.height / 2) idx++;
+        });
+        if (moveEdge(CURRENT, TREE_BOXES[b.parent].hash, b.mvKey, idx)) renderEditorTab();
+      };
+      document.addEventListener("pointermove", move); document.addEventListener("pointerup", up);
+    });
+  });
 }
 (function setupMoveDeleteGestures() {
   if (typeof document === "undefined" || !document.addEventListener) return;
@@ -1155,7 +1203,7 @@ function askDeleteAt(el, x, y) {
 function stepKey(dir) {
   if (!CURRENT) return false;
   if (dir < 0) { if (!PATH.length) return false; PATH = PATH.slice(0, -1); SELECTED = null; return true; }
-  const node = currentNode(); const k = Object.keys(node.edges).find(x => CURRENT.nodes[node.edges[x].to]);
+  const node = currentNode(); const k = edgeKeys(node).find(x => CURRENT.nodes[node.edges[x].to]);
   if (!k) return false;
   PATH.push({ mv: node.edges[k].mv, hash: node.edges[k].to }); SELECTED = null; return true;
 }
@@ -1663,7 +1711,7 @@ function kifToResearch(parsed, fileName) {
       node.turn = node.turn === "S" ? "G" : "S";
       hash = encodeStateCompact(node.board, node.hands, node.turn);
       if (!r.nodes[hash]) r.nodes[hash] = { board: cloneBoard(node.board), hands: cloneHands(node.hands), turn: node.turn, edges: {}, note: "" };
-      r.nodes[fromHash].edges[JSON.stringify(mv)] = { mv, to: hash };
+      r.nodes[fromHash].edges[mvKeyOf(mv)] = { mv, to: hash };
       if (mvTok.comments.length) {
         const add = mvTok.comments.join("\n");
         const nd = r.nodes[hash];
@@ -1897,7 +1945,6 @@ function renderEditorTab() {
 
   { // メッセージ欄(高さ固定。王手・詰み・スキップの結果をここに出す)
     let m = "";
-    if (SKIP_MSG) { m += `<div class="tip">⏭ ${SKIP_MSG}</div>`; SKIP_MSG = ""; }
     if (mated) m += `<div class="warn">この局面、手番(${node.turn==="S"?"先手":"後手"})の詰みです。</div>`;
     else if (inCheck) m += `<div class="warn">王手がかかっている。</div>`;
     html += `<div class="slot">${m}</div>`;
@@ -1911,17 +1958,16 @@ function renderEditorTab() {
   html += `<div class="side-col">`;
   html += engineSlotHTML();
   html += `<div class="small" style="font-weight:700; margin-bottom:6px;">${SELECTED?"移動先をタップ(選んだ駒をもう一度タップするか、盤の外をタップで選択解除)":"駒か持ち駒をタップして手を選ぶ"}</div>`;
-  const edges = Object.values(node.edges);
-  html += `<div class="small" style="font-weight:700; margin:10px 0 6px;">この局面から記録済みの手 <span style="font-weight:400;">(⏭=合流局面などまで一気に進む)</span></div>`;
-  if (!edges.length) html += `<div class="small">なし(盤で新しい手を指すと、ここに出ます)</div>`;
-  {
-    edges.forEach(e => {
-      html += `<div class="edge-item" data-edgekey="${encodeURIComponent(JSON.stringify(e.mv))}">
-        <span>${moveToNotation(e.mv)}</span>
-        <span class="small">${CURRENT.nodes[e.to].note ? "📝" : ""} <button class="secondary" data-skip="${encodeURIComponent(JSON.stringify(e.mv))}" title="この手の先の合流局面・分岐・終端まで進む" style="padding:2px 10px; font-size:12px;">⏭ 先へ</button></span>
-      </div>`;
-    });
-  }
+  const ekeys = edgeKeys(node).filter(k => CURRENT.nodes[node.edges[k].to]);
+  html += `<div class="small" style="font-weight:700; margin:10px 0 6px;">この局面から記録済みの手 <span style="font-weight:400;">(クリックでその局面へ)</span></div>`;
+  if (!ekeys.length) html += `<div class="small">なし(盤で新しい手を指すと、ここに出ます)</div>`;
+  ekeys.forEach((k, idx) => {
+    const e = node.edges[k];
+    html += `<div class="edge-item" data-edgekey="${encodeURIComponent(k)}">
+      <span>${moveToNotation(e.mv)}</span>
+      <span class="small">${idx === 0 && ekeys.length > 1 ? "本筋 " : ""}${CURRENT.nodes[e.to].note ? "📝" : ""}</span>
+    </div>`;
+  });
   html += `</div></div>`;
 
   { // ツリーダイアグラム(盤の下。折りたためる)
@@ -1929,7 +1975,7 @@ function renderEditorTab() {
     html += `<div class="card" id="treeCard" style="margin-top:12px;">
       <div class="row" style="justify-content:space-between;"><span style="font-weight:700; font-size:13px;">ツリーダイアグラム <span class="small">(${countNodes(CURRENT)}局面)</span></span>
       <button class="secondary" id="btnTreeToggle" style="padding:3px 10px; font-size:11px;">${TREE_OPEN ? "たたむ ▲" : "ひらく ▼"}</button></div>`;
-    if (TREE_OPEN) html += `<div class="small" style="margin:4px 0 6px;">手をタップでその局面へ移動 ／ 右クリック・長押しで「この手を削除」。青=先手 黄=後手 ★=テーマ図 ↪=別の手順で合流</div><div class="tree-scroll" id="treeScroll">${treeHTML(CURRENT, L, PATH.map(p => JSON.stringify(p.mv)), currentHash())}</div>`;
+    if (TREE_OPEN) html += `<div class="small" style="margin:4px 0 6px;">手をタップでその局面へ移動 ／ 右クリック・長押しで「本筋にする・削除」など。パソコンは箱を上下にドラッグで並べ替え。青=先手 黄=後手 ★=テーマ図 ↪=別の手順で合流</div><div class="tree-scroll" id="treeScroll">${treeHTML(CURRENT, L, PATH.map(p => mvKeyOf(p.mv)), currentHash())}</div>`;
     html += `</div>`;
   }
 
@@ -1946,20 +1992,11 @@ function renderEditorTab() {
     span.onclick = () => onHandClick(span.dataset.hand, span.dataset.side);
   });
   document.getElementById("btnBack").onclick = () => { if (PATH.length) { PATH = PATH.slice(0, -1); SELECTED = null; renderEditorTab(); } };
-  el.querySelectorAll("[data-skip]").forEach(btn => {
-    btn.onclick = (ev) => {
-      ev.stopPropagation();
-      const mv = JSON.parse(decodeURIComponent(btn.dataset.skip));
-      const r = skipAlong(CURRENT, currentHash(), JSON.stringify(mv)); if (!r) return;
-      PATH = PATH.concat(r.path); SELECTED = null; SKIP_MSG = SKIP_TEXT[r.reason] + `(${r.path.length}手進んだ)`; renderEditorTab();
-    };
-  });
   el.querySelectorAll("[data-edgekey]").forEach(item => {
     item.onclick = () => {
-      const mv = JSON.parse(decodeURIComponent(item.dataset.edgekey));
-      const node2 = currentNode();
-      const edge = node2.edges[JSON.stringify(mv)];
-      PATH.push({ mv, hash: edge.to }); SELECTED=null; renderEditorTab();
+      const key = decodeURIComponent(item.dataset.edgekey);
+      const edge = currentNode().edges[key]; if (!edge) return;
+      PATH.push({ mv: edge.mv, hash: edge.to }); SELECTED = null; renderEditorTab();
     };
   });
   document.getElementById("sideSel").onchange = (e) => { CURRENT.side = e.target.value || null; CURRENT._flip = null; renderEditorTab(); };
@@ -1980,8 +2017,9 @@ function renderEditorTab() {
     renderEditorTab();
   };
   el.querySelectorAll(".tbox").forEach(b => {
-    b.onclick = () => { PATH = pathOfBox(TREE_BOXES, parseInt(b.dataset.i, 10)); SELECTED = null; renderEditorTab(); };
+    b.onclick = () => { if (Date.now() - DRAG_CLICK_BLOCK < 400) return; PATH = pathOfBox(TREE_BOXES, parseInt(b.dataset.i, 10)); SELECTED = null; renderEditorTab(); };
   });
+  setupTreeDrag(el);
   { const ts = document.getElementById("treeScroll");
     if (ts) {
       if (_tsPos) { ts.scrollLeft = _tsPos.l; ts.scrollTop = _tsPos.t; }
@@ -2143,6 +2181,8 @@ function renderSettingsTab() {
       <div class="small" style="margin-bottom:8px; font-weight:700;">統合の確認</div>
       <div class="small" style="margin-bottom:6px;">研究を保存する時、既存の研究と共通の局面がこの手数以降にあれば、統合するか確認する。<br>
       (片方が丸ごともう片方に含まれる場合も確認する)</div>
+      <div class="row" style="margin-bottom:8px;"><label style="display:inline; margin:0;"><input type="checkbox" id="mergeConfirmChk" ${mergeConfirmOn() ? "checked" : ""} style="width:auto; display:inline-block;"> 保存時に、既存の研究との統合を確認する</label></div>
+      <div class="small" style="margin-bottom:6px;">オフにすると、保存時には統合を聞かない。統合したくなったら、「保存済み研究」から手動でできる。</div>
       <div class="row"><input type="number" id="mergeMinPlyInput" min="1" max="300" value="${mergeMinPly()}" style="width:80px;"> <span class="small">手目以降(初期値 ${MERGE_MIN_PLY_DEFAULT})</span></div>
     </div>
     <div class="card">
@@ -2165,6 +2205,7 @@ function renderSettingsTab() {
   document.getElementById("engArrowChk").onchange = (e) => { engSetArrowOn(e.target.checked); };
   document.getElementById("engBarChk").onchange = (e) => { engSetBarOn(e.target.checked); };
   document.getElementById("engArrowNSel").onchange = (e) => { engSetArrowN(parseInt(e.target.value, 10)); };
+  document.getElementById("mergeConfirmChk").onchange = (e) => { setMergeConfirmOn(e.target.checked); };
   document.getElementById("mergeMinPlyInput").onchange = (e) => {
     const v = parseInt(e.target.value, 10);
     if (v >= 1 && v <= 300) setMergeMinPly(v); else { alert("1〜300の数字で入れてほしい。"); e.target.value = mergeMinPly(); }
