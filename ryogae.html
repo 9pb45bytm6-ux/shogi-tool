@@ -69,27 +69,22 @@ table.ex td{padding:2px 10px 2px 0}
   <div class="scoreline"><span>SCORE <b id="score">0</b>円</span><span>HIGH <span id="high">0</span>円</span></div>
   <div class="tray"><div class="board" id="board"><svg id="pathsvg" viewBox="0 0 5 8" preserveAspectRatio="none"></svg></div></div>
   <div class="info" id="info">同じ硬貨を、上下左右につないでなぞろう</div>
-  <div class="row">
-    <button class="b" id="bHint">ヒント x3</button>
-    <span class="plays" id="plays"></span>
-  </div>
   <details class="how">
     <summary>あそびかた</summary>
     <p style="margin:6px 0">同じ硬貨を、上下左右につないで指でなぞります。ちょうどの枚数でなぞって離すと、次の硬貨に両替されます(なぞった最後のマスに新しい硬貨が出ます)。空いたマスには上から新しい硬貨が落ちてきます。</p>
     <table class="ex">
-      <tr><td>1円 × 5枚</td><td>→ 5円</td></tr>
       <tr><td>5円 × 2枚</td><td>→ 10円</td></tr>
       <tr><td>10円 × 5枚</td><td>→ 50円</td></tr>
       <tr><td>50円 × 2枚</td><td>→ 100円</td></tr>
       <tr><td>100円 × 5枚</td><td>→ 500円</td></tr>
       <tr><td>500円 × 2枚</td><td>→ 千円札</td></tr>
     </table>
-    <p style="margin:6px 0">SCOREは盤の上にある金額の合計です。千円札はこれ以上両替できません。両替できる組み合わせがなくなると「手詰まり」でおしまいです。</p>
+    <p style="margin:6px 0">SCOREは盤の上にある金額の合計です。千円札はこれ以上両替できません。両替できる組み合わせがなくなると「ゲームオーバー」です。</p>
   </details>
 </div>
 
 <div class="overlay" id="endDlg"><div class="dlg">
-  <h2>手詰まりです!</h2>
+  <h2>ゲームオーバー!</h2>
   <div class="big" id="endScore"></div>
   <p id="endSub"></p>
   <div class="rowb"><button class="b primary" id="bAgain">もう一度</button><button class="b" id="bHome">ゲーム置き場へ</button></div>
@@ -99,9 +94,9 @@ table.ex td{padding:2px 10px 2px 0}
 /* ===== 両替ゲーム ロジック(画面に依存しない) =====
    盤: 8行×5列。各マスは {id, v} (v = 1,5,10,50,100,500 の硬貨 / 1000 の千円札) か null */
 const ROWS = 8, COLS = 5;
-const DENOMS = [1, 5, 10, 50, 100, 500];
-const NEED = { 1: 5, 5: 2, 10: 5, 50: 2, 100: 5, 500: 2 };      // 次の硬貨にするのに必要な枚数
-const NEXT = { 1: 5, 5: 10, 10: 50, 50: 100, 100: 500, 500: 1000 };
+const DENOMS = [5, 10, 50, 100, 500];
+const NEED = { 5: 2, 10: 5, 50: 2, 100: 5, 500: 2 };      // 次の硬貨にするのに必要な枚数
+const NEXT = { 5: 10, 10: 50, 50: 100, 100: 500, 500: 1000 };
 const DIRS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 let _nid = 1;
 function nid() { return _nid++; }
@@ -198,7 +193,6 @@ if (typeof module !== 'undefined') module.exports = { ROWS, COLS, NEED, NEXT, ne
 
   /* ---------- 絵(独自デザインの簡易な硬貨と千円札) ---------- */
   const SPEC = {
-    1:   { r: 34, fill: '#eceff1', ring: '#a7b0b7', txt: '#5b646b', hole: false, fs: 34 },
     5:   { r: 40, fill: '#e8c860', ring: '#a98a2c', txt: '#6a5316', hole: true,  fs: 22 },
     10:  { r: 44, fill: '#cf8250', ring: '#7f4a26', txt: '#4d2a12', hole: false, fs: 36 },
     50:  { r: 41, fill: '#dbe2e7', ring: '#8b97a1', txt: '#3f4a53', hole: true,  fs: 22 },
@@ -273,16 +267,13 @@ if (typeof module !== 'undefined') module.exports = { ROWS, COLS, NEED, NEXT, ne
   }
   function drawMeta() {
     $('#high').textContent = high.toLocaleString('ja-JP');
-    $('#plays').textContent = plays + '回目';
-    $('#bHint').textContent = 'ヒント x' + hints;
-    $('#bHint').disabled = hints <= 0 || locked;
   }
 
   function newGame() {
     clearTimeout(hintTimer); clearHint(); clearDrag();
     let g, tries = 0;
     do { g = newGrid(Math.random); tries++; } while (!findPath(g) && tries < 200);
-    grid = g; plays++; lsSet('taco_ryogae_plays', String(plays));
+    grid = g;
     hints = 3; locked = false; score = total(grid);
     $('#endDlg').classList.remove('on');
     renderAll(); drawScore(score, true); drawMeta();
@@ -383,16 +374,6 @@ if (typeof module !== 'undefined') module.exports = { ROWS, COLS, NEED, NEXT, ne
 
   /* ---------- ヒント ---------- */
   function clearHint() { clearTimeout(hintTimer); for (const k in els) els[k].classList.remove('hintc'); if (!drag) pathsvg.innerHTML = ''; }
-  $('#bHint').addEventListener('click', () => {
-    if (locked || hints <= 0 || !grid) return;
-    const p = findPath(grid, Math.random); if (!p) return;
-    hints--; drawMeta(); clearHint();
-    for (const [r, c] of p) els[grid[r][c].id].classList.add('hintc');
-    const pts = p.map(([r, c]) => `${c + 0.5},${r + 0.5}`).join(' ');
-    pathsvg.innerHTML = `<polyline points="${pts}" fill="none" stroke="#e08a00" stroke-width="0.08" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="0.18 0.14"/>`;
-    hintTimer = setTimeout(clearHint, 2200);
-  });
-
   $('#bReset').addEventListener('click', () => newGame());
   $('#bAgain').addEventListener('click', () => newGame());
   $('#bHome').addEventListener('click', () => { location.href = 'games.html'; });
