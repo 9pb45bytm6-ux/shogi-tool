@@ -516,7 +516,7 @@ function renderLockScreen() {
     <div class="small" style="margin-bottom:12px; line-height:1.6;">
       このツールの無料体験期間(〜2026/9/30)が終了した。<br>
       これまで登録したデータは、下のボタンから書き出して保存できる。<br>
-      正式版(Web版)への移行についてはTKTDESUYOまで連絡してほしい。
+      正式版(Web版)への移行については運営者まで連絡してほしい。
     </div>
     <button id="btnLockExport">全データをJSONで書き出す</button>
   `;
@@ -1131,7 +1131,7 @@ function renderSettingsTab() {
   el.innerHTML = `
     <div class="card">
       <label>自分の将棋ウォーズID(複数アカウントある場合はカンマ区切りで全部入力)</label>
-      <input type="text" id="myNamesInput" value="${MYNAMES.join(", ")}" placeholder="例: TKTDESUYO, TKTdao, issy1484">
+      <input type="text" id="myNamesInput" value="${MYNAMES.join(", ")}" placeholder="例: yamada_taro, shogi_hanako">
       <div class="hint">ここに登録した名前が「先手」または「後手」に出てきた対局を、自分の対局として自動集計する。</div>
       <div style="margin-top:10px;"><button id="btnSaveNames">保存</button></div>
     </div>
