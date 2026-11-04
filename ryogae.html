@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>両替ゲーム — タコのゲーム置き場</title>
+<style>
+:root{
+  --cs:min(17vw,64px);
+  --bg:#faf6ee; --ink:#2b2118; --mute:#6b5b48; --card:#fff; --bd:#dccfb8; --accent:#b4442c;
+  --bar:#dfeedd; --barbd:#9cc79a;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#1f1b16; --ink:#f1e8da; --mute:#b6a78f; --card:#2a2520; --bd:#4a4034; --bar:#2c3a2b; --barbd:#4d6b4b;}
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Hiragino Sans","Yu Gothic",sans-serif;line-height:1.5;-webkit-text-size-adjust:100%}
+.bar{background:var(--bar);border-bottom:2px solid var(--barbd);padding:10px 14px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.bar a,.bar button.lnk{color:var(--ink);font-weight:700;font-size:15px;text-decoration:underline;background:none;border:none;padding:0;cursor:pointer;font-family:inherit}
+.bar .sp{flex:1}
+.wrap{max-width:420px;margin:0 auto;padding:10px 12px 40px}
+h1{font-size:18px;margin:4px 0 8px}
+.scoreline{display:flex;justify-content:space-between;font-size:14px;color:var(--mute);margin-bottom:6px;font-variant-numeric:tabular-nums}
+.scoreline b{color:var(--ink);font-size:18px}
+.tray{width:calc(var(--cs)*5 + 16px);margin:0 auto;padding:6px;background:#d89a5b;border:3px solid #7a4a1f;border-radius:6px}
+.board{position:relative;width:calc(var(--cs)*5);height:calc(var(--cs)*8);background:#f7f1e3;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;
+  background-image:linear-gradient(#e3d9c2 1px,transparent 1px),linear-gradient(90deg,#e3d9c2 1px,transparent 1px);background-size:var(--cs) var(--cs)}
+.coin{position:absolute;left:0;top:0;width:var(--cs);height:var(--cs);padding:3px;transition:transform .3s cubic-bezier(.3,.7,.4,1),opacity .2s,scale .2s;will-change:transform;pointer-events:none}
+.coin svg{width:100%;height:100%;display:block}
+.coin.sel::after{content:"";position:absolute;inset:1px;border-radius:50%;border:3px solid #d12f2f;box-shadow:0 0 0 1px #fff}
+.coin.note.sel::after{border-radius:8px}
+.coin.hintc::after{content:"";position:absolute;inset:1px;border-radius:50%;border:3px dashed #e08a00;box-shadow:0 0 0 1px #fff}
+.coin.note.hintc::after{border-radius:8px}
+.coin.vanish{opacity:0;scale:.3}
+.coin.pop svg{animation:pop .35s ease-out}
+@keyframes pop{0%{transform:scale(.6)}60%{transform:scale(1.25)}100%{transform:scale(1)}}
+#pathsvg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.info{min-height:24px;text-align:center;font-size:14px;margin:8px 0 2px;color:var(--mute)}
+.info b{color:var(--accent)}
+.row{display:flex;gap:10px;justify-content:center;align-items:center;margin:6px 0}
+button.b{font:inherit;font-size:15px;padding:9px 16px;border-radius:10px;border:1px solid var(--bd);background:var(--card);color:var(--ink);cursor:pointer}
+button.b.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
+button.b:disabled{opacity:.4;cursor:default}
+.plays{margin-left:auto;font-size:13px;color:var(--mute)}
+details.how{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:8px 12px;margin-top:14px;font-size:13px}
+details.how summary{cursor:pointer;font-weight:600}
+table.ex{border-collapse:collapse;margin:8px 0 4px;font-size:13px}
+table.ex td{padding:2px 10px 2px 0}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:20}
+.overlay.on{display:flex}
+.dlg{background:var(--card);border-radius:14px;padding:20px 22px;min-width:250px;max-width:86vw;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.35)}
+.dlg h2{margin:0 0 6px;font-size:20px}
+.dlg p{margin:0 0 14px;font-size:14px;color:var(--mute)}
+.dlg .big{font-size:26px;font-weight:700;color:var(--ink);margin:2px 0 4px}
+.dlg .rowb{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+.newrec{color:var(--accent);font-weight:700}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="index.html">🏠 タコのゲーム置き場</a>
+  <button class="lnk" id="bReset">リセット</button>
+  <span class="sp"></span>
+  <button class="lnk" id="bSound" aria-label="効果音">🔊</button>
+</div>
+<div class="wrap">
+  <h1>両替ゲーム</h1>
+  <div class="scoreline"><span>SCORE <b id="score">0</b>円</span><span>HIGH <span id="high">0</span>円</span></div>
+  <div class="tray"><div class="board" id="board"><svg id="pathsvg" viewBox="0 0 5 8" preserveAspectRatio="none"></svg></div></div>
+  <div class="info" id="info">同じ硬貨を、上下左右につないでなぞろう</div>
+  <div class="row">
+    <button class="b" id="bHint">ヒント x3</button>
+    <span class="plays" id="plays"></span>
+  </div>
+  <details class="how">
+    <summary>あそびかた</summary>
+    <p style="margin:6px 0">同じ硬貨を、上下左右につないで指でなぞります。ちょうどの枚数でなぞって離すと、次の硬貨に両替されます(なぞった最後のマスに新しい硬貨が出ます)。空いたマスには上から新しい硬貨が落ちてきます。</p>
+    <table class="ex">
+      <tr><td>1円 × 5枚</td><td>→ 5円</td></tr>
+      <tr><td>5円 × 2枚</td><td>→ 10円</td></tr>
+      <tr><td>10円 × 5枚</td><td>→ 50円</td></tr>
+      <tr><td>50円 × 2枚</td><td>→ 100円</td></tr>
+      <tr><td>100円 × 5枚</td><td>→ 500円</td></tr>
+      <tr><td>500円 × 2枚</td><td>→ 千円札</td></tr>
+    </table>
+    <p style="margin:6px 0">SCOREは盤の上にある金額の合計です。千円札はこれ以上両替できません。両替できる組み合わせがなくなると「手詰まり」でおしまいです。</p>
+  </details>
+</div>
+
+<div class="overlay" id="endDlg"><div class="dlg">
+  <h2>手詰まりです!</h2>
+  <div class="big" id="endScore"></div>
+  <p id="endSub"></p>
+  <div class="rowb"><button class="b primary" id="bAgain">もう一度</button><button class="b" id="bHome">ゲーム置き場へ</button></div>
+</div></div>
+
+<script>
+/* ===== 両替ゲーム ロジック(画面に依存しない) =====
+   盤: 8行×5列。各マスは {id, v} (v = 1,5,10,50,100,500 の硬貨 / 1000 の千円札) か null */
+const ROWS = 8, COLS = 5;
+const DENOMS = [1, 5, 10, 50, 100, 500];
+const NEED = { 1: 5, 5: 2, 10: 5, 50: 2, 100: 5, 500: 2 };      // 次の硬貨にするのに必要な枚数
+const NEXT = { 1: 5, 5: 10, 10: 50, 50: 100, 100: 500, 500: 1000 };
+const DIRS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+let _nid = 1;
+function nid() { return _nid++; }
+function randCoin(rnd) { return DENOMS[Math.floor(rnd() * DENOMS.length)]; }
+function total(g) { let s = 0; for (const row of g) for (const x of row) if (x) s += x.v; return s; }
+function newGrid(rnd) {
+  const g = [];
+  for (let r = 0; r < ROWS; r++) { const row = []; for (let c = 0; c < COLS; c++) row.push({ id: nid(), v: randCoin(rnd) }); g.push(row); }
+  return g;
+}
+function shuffleArr(a, rnd) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+
+/* 上下左右につないだ「ちょうどの枚数」の道を1つ探す。なければ null */
+function findPath(g, rnd) {
+  const starts = [];
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (g[r][c] && NEED[g[r][c].v]) starts.push([r, c]);
+  if (rnd) shuffleArr(starts, rnd);
+  for (const [r, c] of starts) {
+    const v = g[r][c].v, need = NEED[v];
+    const path = [[r, c]], seen = new Set([r * COLS + c]);
+    if (dfs(g, path, seen, need, v)) return path;
+  }
+  return null;
+}
+function dfs(g, path, seen, need, v) {
+  if (path.length === need) return true;
+  const [r, c] = path[path.length - 1];
+  for (const [dr, dc] of DIRS4) {
+    const nr = r + dr, nc = c + dc;
+    if (nr < 0 || nr >= ROWS || nc < 0 || nc >= COLS) continue;
+    const k = nr * COLS + nc;
+    if (seen.has(k) || !g[nr][nc] || g[nr][nc].v !== v) continue;
+    path.push([nr, nc]); seen.add(k);
+    if (dfs(g, path, seen, need, v)) return true;
+    path.pop(); seen.delete(k);
+  }
+  return false;
+}
+/* なぞった道が両替できるか(同じ硬貨・隣どうし・重複なし・枚数がちょうど) */
+function validPath(g, path) {
+  if (!path || !path.length) return false;
+  const first = g[path[0][0]] && g[path[0][0]][path[0][1]];
+  if (!first || !NEED[first.v]) return false;
+  const v = first.v;
+  if (path.length !== NEED[v]) return false;
+  const seen = new Set();
+  for (let i = 0; i < path.length; i++) {
+    const [r, c] = path[i];
+    if (r < 0 || r >= ROWS || c < 0 || c >= COLS) return false;
+    const x = g[r][c]; if (!x || x.v !== v) return false;
+    const k = r * COLS + c; if (seen.has(k)) return false; seen.add(k);
+    if (i > 0) { const [pr, pc] = path[i - 1]; if (Math.abs(pr - r) + Math.abs(pc - c) !== 1) return false; }
+  }
+  return true;
+}
+/* 両替する。新しい硬貨は「なぞった最後のマス」に出る。残りのマスは空き → 上の硬貨が落ち、上から新しい硬貨が降る */
+function mergePath(g, path, rnd) {
+  const v = g[path[0][0]][path[0][1]].v;
+  const last = path[path.length - 1];
+  const removed = path.slice(0, -1).map(([r, c]) => g[r][c].id);
+  const work = g.map(row => row.map(x => (x ? { id: x.id, v: x.v } : null)));
+  for (const [r, c] of path.slice(0, -1)) work[r][c] = null;
+  const lastObj = { id: work[last[0]][last[1]].id, v: NEXT[v] };
+  work[last[0]][last[1]] = lastObj;
+  const falls = [], spawned = [], ng = [];
+  for (let r = 0; r < ROWS; r++) ng.push(new Array(COLS).fill(null));
+  for (let c = 0; c < COLS; c++) {
+    const items = [];
+    for (let r = ROWS - 1; r >= 0; r--) if (work[r][c]) items.push({ o: work[r][c], from: r });
+    const m = ROWS - items.length;
+    let r = ROWS - 1;
+    for (const it of items) { ng[r][c] = it.o; if (it.from !== r) falls.push({ id: it.o.id, c, toR: r }); r--; }
+    for (; r >= 0; r--) { const o = { id: nid(), v: randCoin(rnd) }; ng[r][c] = o; spawned.push({ id: o.id, v: o.v, c, toR: r, startR: r - m }); }
+  }
+  return { grid: ng, removed, lastId: lastObj.id, newValue: NEXT[v], falls, spawned };
+}
+if (typeof module !== 'undefined') module.exports = { ROWS, COLS, NEED, NEXT, newGrid, total, findPath, validPath, mergePath, randCoin };
+
+
+/* ===================== 画面 ===================== */
+(function () {
+  const $ = s => document.querySelector(s);
+  const board = $('#board'), pathsvg = $('#pathsvg');
+  let grid = null, els = {}, locked = false, plays = 0, high = 0, score = 0, shownScore = 0, hints = 3, soundOn = true;
+  let drag = null, hintTimer = null;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const nextFrame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+  function lsGet(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch (e) { return d; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  plays = parseInt(lsGet('taco_ryogae_plays', '0'), 10) || 0;
+  high = parseInt(lsGet('taco_ryogae_high', '0'), 10) || 0;
+  soundOn = lsGet('taco_ryogae_sound', '1') === '1';
+
+  /* ---------- 絵(独自デザインの簡易な硬貨と千円札) ---------- */
+  const SPEC = {
+    1:   { r: 34, fill: '#eceff1', ring: '#a7b0b7', txt: '#5b646b', hole: false, fs: 34 },
+    5:   { r: 40, fill: '#e8c860', ring: '#a98a2c', txt: '#6a5316', hole: true,  fs: 22 },
+    10:  { r: 44, fill: '#cf8250', ring: '#7f4a26', txt: '#4d2a12', hole: false, fs: 36 },
+    50:  { r: 41, fill: '#dbe2e7', ring: '#8b97a1', txt: '#3f4a53', hole: true,  fs: 22 },
+    100: { r: 44, fill: '#f1f4f6', ring: '#8b97a1', txt: '#3f4a53', hole: false, fs: 32 },
+    500: { r: 47, fill: '#e8c860', ring: '#8b97a1', txt: '#3f4a53', hole: false, fs: 30, bi: true }
+  };
+  function coinSVG(v) {
+    if (v === 1000) {
+      return '<svg viewBox="0 0 100 100"><rect x="5" y="22" width="90" height="56" rx="6" fill="#c8e6cb" stroke="#3b7a4d" stroke-width="3"/>' +
+        '<rect x="11" y="28" width="78" height="44" rx="3" fill="none" stroke="#3b7a4d" stroke-width="1.6" stroke-dasharray="4 3"/>' +
+        '<circle cx="27" cy="50" r="10" fill="none" stroke="#3b7a4d" stroke-width="2"/><circle cx="27" cy="50" r="4" fill="#3b7a4d" opacity=".5"/>' +
+        '<text x="62" y="59" font-size="25" font-weight="700" text-anchor="middle" fill="#27563a" font-family="serif">千円</text></svg>';
+    }
+    const p = SPEC[v];
+    let s = '<svg viewBox="0 0 100 100">';
+    s += `<circle cx="50" cy="50" r="${p.r}" fill="${p.fill}" stroke="${p.ring}" stroke-width="3"/>`;
+    if (p.bi) s += `<circle cx="50" cy="50" r="${p.r - 12}" fill="#e8c860" stroke="${p.ring}" stroke-width="2"/>`;
+    else s += `<circle cx="50" cy="50" r="${p.r - 7}" fill="none" stroke="${p.ring}" stroke-width="1.4" opacity=".7"/>`;
+    if (p.hole) {
+      s += `<circle cx="50" cy="40" r="7" fill="#f7f1e3" stroke="${p.ring}" stroke-width="2"/>`;
+      s += `<text x="50" y="72" font-size="${p.fs}" font-weight="700" text-anchor="middle" fill="${p.txt}" font-family="system-ui,sans-serif">${v}</text>`;
+    } else {
+      s += `<text x="50" y="${50 + p.fs * 0.36}" font-size="${p.fs}" font-weight="700" text-anchor="middle" fill="${p.txt}" font-family="system-ui,sans-serif">${v}</text>`;
+    }
+    return s + '</svg>';
+  }
+
+  /* ---------- 効果音(簡易) ---------- */
+  let actx = null;
+  function tone(f, d, type, vol, delay) {
+    if (!soundOn) return;
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      const t0 = actx.currentTime + (delay || 0), o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || 'sine'; o.frequency.value = f; g.gain.setValueAtTime(vol || 0.08, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+      o.connect(g); g.connect(actx.destination); o.start(t0); o.stop(t0 + d + 0.02);
+    } catch (e) {}
+  }
+  const sndTick = n => tone(520 + n * 60, 0.08, 'triangle', 0.06);
+  const sndMerge = () => { tone(880, 0.12, 'sine', 0.09); tone(1320, 0.18, 'sine', 0.08, 0.08); };
+  const sndOver = () => { tone(330, 0.25, 'sawtooth', 0.05); tone(247, 0.4, 'sawtooth', 0.05, 0.2); };
+  const sndNg = () => tone(180, 0.12, 'square', 0.04);
+  function drawSound() { $('#bSound').textContent = soundOn ? '🔊' : '🔇'; }
+
+  /* ---------- 盤の描画 ---------- */
+  function posStyle(r, c) { return `translate(calc(var(--cs) * ${c}), calc(var(--cs) * ${r}))`; }
+  function makeEl(o, r, c) {
+    const d = document.createElement('div');
+    d.className = 'coin' + (o.v === 1000 ? ' note' : '');
+    d.innerHTML = coinSVG(o.v);
+    d.style.transform = posStyle(r, c);
+    board.appendChild(d); els[o.id] = d;
+    return d;
+  }
+  function renderAll() {
+    for (const k in els) els[k].remove();
+    els = {};
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) makeEl(grid[r][c], r, c);
+    refreshCoinMeta();
+  }
+  function refreshCoinMeta() { /* 位置を後で引くための索引は不要(座標計算で足りる) */ }
+
+  function drawScore(target, instant) {
+    const from = shownScore, t0 = performance.now(), dur = instant ? 0 : 450;
+    function step(now) {
+      const k = dur ? Math.min(1, (now - t0) / dur) : 1;
+      shownScore = Math.round(from + (target - from) * k);
+      $('#score').textContent = shownScore.toLocaleString('ja-JP');
+      if (k < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+  function drawMeta() {
+    $('#high').textContent = high.toLocaleString('ja-JP');
+    $('#plays').textContent = plays + '回目';
+    $('#bHint').textContent = 'ヒント x' + hints;
+    $('#bHint').disabled = hints <= 0 || locked;
+  }
+
+  function newGame() {
+    clearTimeout(hintTimer); clearHint(); clearDrag();
+    let g, tries = 0;
+    do { g = newGrid(Math.random); tries++; } while (!findPath(g) && tries < 200);
+    grid = g; plays++; lsSet('taco_ryogae_plays', String(plays));
+    hints = 3; locked = false; score = total(grid);
+    $('#endDlg').classList.remove('on');
+    renderAll(); drawScore(score, true); drawMeta();
+    setInfo('同じ硬貨を、上下左右につないでなぞろう');
+  }
+
+  function setInfo(html) { $('#info').innerHTML = html; }
+
+  /* ---------- なぞる操作 ---------- */
+  function cellAt(e) {
+    const rect = board.getBoundingClientRect();
+    const cw = rect.width / COLS, ch = rect.height / ROWS;
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    const c = Math.floor(x / cw), r = Math.floor(y / ch);
+    if (r < 0 || r >= ROWS || c < 0 || c >= COLS) return null;
+    // 斜めに角を切るときの誤判定を減らすため、マスの中心の近くだけ反応する
+    const cx = (c + 0.5) * cw, cy = (r + 0.5) * ch;
+    if (Math.hypot(x - cx, y - cy) > cw * 0.46) return null;
+    return [r, c];
+  }
+  const same = (a, b) => a[0] === b[0] && a[1] === b[1];
+  function updateDrag() {
+    for (const k in els) els[k].classList.remove('sel');
+    if (!drag) { pathsvg.innerHTML = ''; return; }
+    for (const [r, c] of drag.path) { const o = grid[r][c]; if (o && els[o.id]) els[o.id].classList.add('sel'); }
+    const pts = drag.path.map(([r, c]) => `${c + 0.5},${r + 0.5}`).join(' ');
+    pathsvg.innerHTML = `<polyline points="${pts}" fill="none" stroke="#d12f2f" stroke-width="0.09" stroke-linecap="round" stroke-linejoin="round"/>`;
+    const v = grid[drag.path[0][0]][drag.path[0][1]].v, need = NEED[v];
+    if (drag.path.length === need) setInfo(`<b>はなすと ${NEXT[v] === 1000 ? '千円札' : NEXT[v] + '円'} に両替!</b>`);
+    else setInfo(`${v}円 ${drag.path.length} / ${need} 枚`);
+  }
+  function clearDrag() { drag = null; for (const k in els) els[k].classList.remove('sel'); pathsvg.innerHTML = ''; }
+
+  board.addEventListener('pointerdown', e => {
+    if (locked || !grid) return;
+    clearHint();
+    const cell = cellAt(e); if (!cell) return;
+    const o = grid[cell[0]][cell[1]];
+    if (!o || !NEED[o.v]) { sndNg(); setInfo('千円札はこれ以上両替できません'); return; }
+    try { board.setPointerCapture(e.pointerId); } catch (err) {}
+    drag = { path: [cell] }; sndTick(0); updateDrag(); e.preventDefault();
+  });
+  board.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const cell = cellAt(e); if (!cell) return;
+    const p = drag.path, last = p[p.length - 1];
+    if (same(cell, last)) return;
+    if (p.length >= 2 && same(cell, p[p.length - 2])) { p.pop(); updateDrag(); return; }   // 戻る
+    if (Math.abs(cell[0] - last[0]) + Math.abs(cell[1] - last[1]) !== 1) return;            // 上下左右だけ
+    const v = grid[p[0][0]][p[0][1]].v;
+    const o = grid[cell[0]][cell[1]];
+    if (!o || o.v !== v) return;
+    if (p.some(q => same(q, cell))) return;
+    if (p.length >= NEED[v]) return;                                                         // ちょうどの枚数まで
+    p.push(cell); sndTick(p.length - 1); updateDrag();
+  });
+  async function endDrag() {
+    if (!drag) return;
+    const path = drag.path; clearDrag();
+    if (validPath(grid, path)) await doMerge(path);
+    else { if (path.length > 1) { sndNg(); const v = grid[path[0][0]][path[0][1]].v; setInfo(`${v}円は ${NEED[v]} 枚ちょうどでなぞってね(${path.length}枚だった)`); } else setInfo('同じ硬貨を、上下左右につないでなぞろう'); }
+  }
+  board.addEventListener('pointerup', endDrag);
+  board.addEventListener('pointercancel', () => { clearDrag(); setInfo('同じ硬貨を、上下左右につないでなぞろう'); });
+
+  /* ---------- 両替 ---------- */
+  async function doMerge(path) {
+    locked = true; drawMeta();
+    const res = mergePath(grid, path, Math.random);
+    sndMerge();
+    for (const id of res.removed) els[id].classList.add('vanish');
+    const le = els[res.lastId];
+    le.innerHTML = coinSVG(res.newValue); le.classList.toggle('note', res.newValue === 1000);
+    le.classList.remove('pop'); void le.offsetWidth; le.classList.add('pop');
+    await sleep(230);
+    for (const id of res.removed) { els[id].remove(); delete els[id]; }
+    grid = res.grid;
+    for (const s of res.spawned) makeEl({ id: s.id, v: s.v }, s.startR, s.c);
+    await nextFrame();
+    for (const f of res.falls) els[f.id].style.transform = posStyle(f.toR, f.c);
+    for (const s of res.spawned) els[s.id].style.transform = posStyle(s.toR, s.c);
+    score = total(grid); drawScore(score);
+    await sleep(340);
+    locked = false;
+    if (!findPath(grid)) { gameOver(); return; }
+    setInfo('同じ硬貨を、上下左右につないでなぞろう'); drawMeta();
+  }
+
+  function gameOver() {
+    locked = true; sndOver();
+    const rec = score > high;
+    if (rec) { high = score; lsSet('taco_ryogae_high', String(high)); }
+    $('#endScore').textContent = score.toLocaleString('ja-JP') + '円';
+    $('#endSub').innerHTML = rec ? '<span class="newrec">ハイスコア更新!</span>' : 'ハイスコア ' + high.toLocaleString('ja-JP') + '円';
+    drawMeta();
+    setTimeout(() => $('#endDlg').classList.add('on'), 400);
+  }
+
+  /* ---------- ヒント ---------- */
+  function clearHint() { clearTimeout(hintTimer); for (const k in els) els[k].classList.remove('hintc'); if (!drag) pathsvg.innerHTML = ''; }
+  $('#bHint').addEventListener('click', () => {
+    if (locked || hints <= 0 || !grid) return;
+    const p = findPath(grid, Math.random); if (!p) return;
+    hints--; drawMeta(); clearHint();
+    for (const [r, c] of p) els[grid[r][c].id].classList.add('hintc');
+    const pts = p.map(([r, c]) => `${c + 0.5},${r + 0.5}`).join(' ');
+    pathsvg.innerHTML = `<polyline points="${pts}" fill="none" stroke="#e08a00" stroke-width="0.08" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="0.18 0.14"/>`;
+    hintTimer = setTimeout(clearHint, 2200);
+  });
+
+  $('#bReset').addEventListener('click', () => newGame());
+  $('#bAgain').addEventListener('click', () => newGame());
+  $('#bHome').addEventListener('click', () => { location.href = 'index.html'; });
+  $('#bSound').addEventListener('click', () => { soundOn = !soundOn; lsSet('taco_ryogae_sound', soundOn ? '1' : '0'); drawSound(); if (soundOn) sndTick(2); });
+
+  drawSound(); newGame();
+  window.__ryogae = { get grid() { return grid; }, get locked() { return locked; }, newGame, get score() { return score; } };   // 動作確認用
+})();
+</script>
+</body>
+</html>
