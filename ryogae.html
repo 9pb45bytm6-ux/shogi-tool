@@ -59,7 +59,7 @@ table.ex td{padding:2px 10px 2px 0}
 </head>
 <body>
 <div class="bar">
-  <a href="index.html">🏠 タコのゲーム置き場</a>
+  <a href="games.html">🏠 タコのゲーム置き場</a>
   <button class="lnk" id="bReset">リセット</button>
   <span class="sp"></span>
   <button class="lnk" id="bSound" aria-label="効果音">🔊</button>
@@ -395,7 +395,7 @@ if (typeof module !== 'undefined') module.exports = { ROWS, COLS, NEED, NEXT, ne
 
   $('#bReset').addEventListener('click', () => newGame());
   $('#bAgain').addEventListener('click', () => newGame());
-  $('#bHome').addEventListener('click', () => { location.href = 'index.html'; });
+  $('#bHome').addEventListener('click', () => { location.href = 'games.html'; });
   $('#bSound').addEventListener('click', () => { soundOn = !soundOn; lsSet('taco_ryogae_sound', soundOn ? '1' : '0'); drawSound(); if (soundOn) sndTick(2); });
 
   drawSound(); newGame();
