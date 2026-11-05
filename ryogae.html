@@ -78,8 +78,10 @@ table.ex td{padding:2px 10px 2px 0}
       <tr><td>50円 × 2枚</td><td>→ 100円</td></tr>
       <tr><td>100円 × 5枚</td><td>→ 500円</td></tr>
       <tr><td>500円 × 2枚</td><td>→ 千円札</td></tr>
+      <tr><td>千円札 × 5枚</td><td>→ 五千円札</td></tr>
+      <tr><td>五千円札 × 2枚</td><td>→ 一万円札</td></tr>
     </table>
-    <p style="margin:6px 0">SCOREは盤の上にある金額の合計です。千円札はこれ以上両替できません。両替できる組み合わせがなくなると「ゲームオーバー」です。</p>
+    <p style="margin:6px 0">SCOREは盤の上にある金額の合計です。一万円札はこれ以上両替できません。両替できる組み合わせがなくなると「ゲームオーバー」です。</p>
   </details>
 </div>
 
@@ -92,11 +94,11 @@ table.ex td{padding:2px 10px 2px 0}
 
 <script>
 /* ===== 両替ゲーム ロジック(画面に依存しない) =====
-   盤: 8行×5列。各マスは {id, v} (v = 1,5,10,50,100,500 の硬貨 / 1000 の千円札) か null */
+   盤: 8行×5列。各マスは {id, v} (v = 5,10,50,100,500 の硬貨 / 1000 千円札 / 5000 五千円札 / 10000 一万円札) か null */
 const ROWS = 8, COLS = 5;
 const DENOMS = [5, 10, 50, 100, 500];
-const NEED = { 5: 2, 10: 5, 50: 2, 100: 5, 500: 2 };      // 次の硬貨にするのに必要な枚数
-const NEXT = { 5: 10, 10: 50, 50: 100, 100: 500, 500: 1000 };
+const NEED = { 5: 2, 10: 5, 50: 2, 100: 5, 500: 2, 1000: 5, 5000: 2 };      // 次の硬貨にするのに必要な枚数
+const NEXT = { 5: 10, 10: 50, 50: 100, 100: 500, 500: 1000, 1000: 5000, 5000: 10000 };
 const DIRS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 let _nid = 1;
 function nid() { return _nid++; }
@@ -199,12 +201,19 @@ if (typeof module !== 'undefined') module.exports = { ROWS, COLS, NEED, NEXT, ne
     100: { r: 44, fill: '#f1f4f6', ring: '#8b97a1', txt: '#3f4a53', hole: false, fs: 32 },
     500: { r: 47, fill: '#e8c860', ring: '#8b97a1', txt: '#3f4a53', hole: false, fs: 30, bi: true }
   };
+  const NOTE = {
+    1000:  { bg: '#c8e6cb', line: '#3b7a4d', txt: '#27563a', label: '千円',   fs: 25 },
+    5000:  { bg: '#e3d4f0', line: '#6b4a8a', txt: '#4a2f66', label: '五千円', fs: 15 },
+    10000: { bg: '#f6dcc0', line: '#a8642a', txt: '#6e3c14', label: '一万円', fs: 15 }
+  };
+  const NOTE_NAME = { 1000: '千円札', 5000: '五千円札', 10000: '一万円札' };
   function coinSVG(v) {
-    if (v === 1000) {
-      return '<svg viewBox="0 0 100 100"><rect x="5" y="22" width="90" height="56" rx="6" fill="#c8e6cb" stroke="#3b7a4d" stroke-width="3"/>' +
-        '<rect x="11" y="28" width="78" height="44" rx="3" fill="none" stroke="#3b7a4d" stroke-width="1.6" stroke-dasharray="4 3"/>' +
-        '<circle cx="27" cy="50" r="10" fill="none" stroke="#3b7a4d" stroke-width="2"/><circle cx="27" cy="50" r="4" fill="#3b7a4d" opacity=".5"/>' +
-        '<text x="62" y="59" font-size="25" font-weight="700" text-anchor="middle" fill="#27563a" font-family="serif">千円</text></svg>';
+    if (NOTE[v]) {
+      const n = NOTE[v];
+      return '<svg viewBox="0 0 100 100"><rect x="5" y="22" width="90" height="56" rx="6" fill="' + n.bg + '" stroke="' + n.line + '" stroke-width="3"/>' +
+        '<rect x="11" y="28" width="78" height="44" rx="3" fill="none" stroke="' + n.line + '" stroke-width="1.6" stroke-dasharray="4 3"/>' +
+        '<circle cx="27" cy="50" r="10" fill="none" stroke="' + n.line + '" stroke-width="2"/><circle cx="27" cy="50" r="4" fill="' + n.line + '" opacity=".5"/>' +
+        '<text x="64" y="' + (n.fs < 20 ? 56 : 59) + '" font-size="' + n.fs + '" font-weight="700" text-anchor="middle" fill="' + n.txt + '" font-family="serif">' + n.label + '</text></svg>';
     }
     const p = SPEC[v];
     let s = '<svg viewBox="0 0 100 100">';
@@ -241,7 +250,7 @@ if (typeof module !== 'undefined') module.exports = { ROWS, COLS, NEED, NEXT, ne
   function posStyle(r, c) { return `translate(calc(var(--cs) * ${c}), calc(var(--cs) * ${r}))`; }
   function makeEl(o, r, c) {
     const d = document.createElement('div');
-    d.className = 'coin' + (o.v === 1000 ? ' note' : '');
+    d.className = 'coin' + (o.v >= 1000 ? ' note' : '');
     d.innerHTML = coinSVG(o.v);
     d.style.transform = posStyle(r, c);
     board.appendChild(d); els[o.id] = d;
@@ -302,8 +311,8 @@ if (typeof module !== 'undefined') module.exports = { ROWS, COLS, NEED, NEXT, ne
     const pts = drag.path.map(([r, c]) => `${c + 0.5},${r + 0.5}`).join(' ');
     pathsvg.innerHTML = `<polyline points="${pts}" fill="none" stroke="#d12f2f" stroke-width="0.09" stroke-linecap="round" stroke-linejoin="round"/>`;
     const v = grid[drag.path[0][0]][drag.path[0][1]].v, need = NEED[v];
-    if (drag.path.length === need) setInfo(`<b>はなすと ${NEXT[v] === 1000 ? '千円札' : NEXT[v] + '円'} に両替!</b>`);
-    else setInfo(`${v}円 ${drag.path.length} / ${need} 枚`);
+    if (drag.path.length === need) setInfo(`<b>はなすと ${NOTE_NAME[NEXT[v]] || NEXT[v] + '円'} に両替!</b>`);
+    else setInfo(`${NOTE_NAME[v] || v + '円'} ${drag.path.length} / ${need} 枚`);
   }
   function clearDrag() { drag = null; for (const k in els) els[k].classList.remove('sel'); pathsvg.innerHTML = ''; }
 
@@ -312,7 +321,7 @@ if (typeof module !== 'undefined') module.exports = { ROWS, COLS, NEED, NEXT, ne
     clearHint();
     const cell = cellAt(e); if (!cell) return;
     const o = grid[cell[0]][cell[1]];
-    if (!o || !NEED[o.v]) { sndNg(); setInfo('千円札はこれ以上両替できません'); return; }
+    if (!o || !NEED[o.v]) { sndNg(); setInfo('一万円札はこれ以上両替できません'); return; }
     try { board.setPointerCapture(e.pointerId); } catch (err) {}
     drag = { path: [cell] }; sndTick(0); updateDrag(); e.preventDefault();
   });
@@ -346,7 +355,7 @@ if (typeof module !== 'undefined') module.exports = { ROWS, COLS, NEED, NEXT, ne
     sndMerge();
     for (const id of res.removed) els[id].classList.add('vanish');
     const le = els[res.lastId];
-    le.innerHTML = coinSVG(res.newValue); le.classList.toggle('note', res.newValue === 1000);
+    le.innerHTML = coinSVG(res.newValue); le.classList.toggle('note', res.newValue >= 1000);
     le.classList.remove('pop'); void le.offsetWidth; le.classList.add('pop');
     await sleep(230);
     for (const id of res.removed) { els[id].remove(); delete els[id]; }
