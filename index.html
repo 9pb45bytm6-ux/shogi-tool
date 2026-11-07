@@ -486,6 +486,153 @@ function computeResult(parsed, myNames) {
   return { tktSide, result };
 }
 
+
+/* ---------- .kif 取り込み(将棋ウォーズ以外の棋譜) ----------
+   本譜だけを読む(変化・コメントは無視)。平手の棋譜だけ対応。
+   指し手は、ウォーズ棋譜と同じ内部形式("７六歩(77)" "５八桂打")に直して持つ。 */
+const KIF2_TERMINALS = ["投了","中断","千日手","持将棋","詰み","詰","切れ負け","反則勝ち","反則負け","不戦勝","不戦敗","入玉勝ち","封じ手","不詰","time-up"];
+const KIF2_MOVE_RE = /^(?:([１２３４５６７８９])([一二三四五六七八九])|同)(成香|成桂|成銀|歩|香|桂|銀|金|角|飛|玉|王|と|馬|龍|竜|杏|圭|全)(不成|成)?(打)?(?:\((\d)(\d)\))?$/;
+const KIF2_PIECE_ALIAS = { "王":"玉", "竜":"龍", "杏":"成香", "圭":"成桂", "全":"成銀" };
+function decodeKifBytes(bytes) {
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch (e) { text = new TextDecoder("shift_jis").decode(bytes); }
+  return text.replace(/^﻿/, "");
+}
+function kif2NormToken(tok) {
+  const z = "１２３４５６７８９", k = "一二三四五六七八九";
+  let t = tok.replace(/[\s　]+/g, "");
+  t = t.replace(/^[1-9]/, c => z[parseInt(c,10)-1]);
+  t = t.replace(/^([１２３４５６７８９])([1-9])/, (a,c,r) => c + k[parseInt(r,10)-1]);
+  return t;
+}
+function kif2NormStartTime(v) {
+  if (!v) return null;
+  const m = /(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/.exec(v);
+  if (!m) return null; // 日付だけの棋譜は、同じ日の別局と重複扱いになるため開始日時なしにする
+  const p2 = x => String(x).padStart(2,"0");
+  return `${m[1]}/${p2(m[2])}/${p2(m[3])} ${p2(m[4])}:${p2(m[5])}:${p2(m[6]||0)}`;
+}
+/* 戻り値: { ok, reason, parsed } 。ok=false のときは取り込まない(reason に理由) */
+function parseKifGame(text) {
+  const headers = {}, tokens = [];
+  let started = false, inVariation = false, ended = false, endReason = null, endNum = null, winner = null, diagram = false;
+  let board = initialBoard(), hands = { S:{}, G:{} }, turn = "S", lastTo = null;
+  for (const raw of text.replace(/\r\n?/g, "\n").split("\n")) {
+    const t = raw.trim();
+    if (!t) continue;
+    if (t[0] === "#" || t[0] === "&" || t[0] === "*") continue;
+    if (/^\|.*\|[一二三四五六七八九]$/.test(t) || /^(先手|後手|上手|下手)の持駒[:：]/.test(t) || /^(先手番|後手番|上手番|下手番)$/.test(t)) { diagram = true; continue; }
+    if (/^変化[:：]/.test(t)) { inVariation = true; continue; }
+    let m = /^まで(\d+)手で(先手|後手|下手|上手)の勝ち/.exec(t);
+    if (m) { if (!inVariation && winner === null) winner = (m[2] === "先手" || m[2] === "下手") ? "S" : "G"; continue; }
+    if (/^まで/.test(t)) continue;
+    m = /^(\d+)\s+(.+?)\s*(?:\(\s*\d+:\d+.*)?$/.exec(t);
+    if (m) {
+      started = true;
+      if (inVariation || ended) continue;
+      const num = parseInt(m[1], 10), tok = m[2].trim();
+      if (/^[-─]+/.test(tok)) continue;
+      const term = KIF2_TERMINALS.find(x => tok.startsWith(x));
+      if (term) { ended = true; endReason = term; endNum = num; continue; }
+      const nt = kif2NormToken(tok);
+      const mm = KIF2_MOVE_RE.exec(nt);
+      if (!mm) return { ok:false, reason:`${num}手目「${tok}」を読めなかった` };
+      let to;
+      if (mm[1]) to = [ZEN2INT[mm[1]], KAN2INT[mm[2]]];
+      else { if (!lastTo) return { ok:false, reason:`${num}手目「${tok}」の「同」の行き先が分からない` }; to = lastTo; }
+      let piece = KIF2_PIECE_ALIAS[mm[3]] || mm[3];
+      const promote = mm[4] === "成", drop = !!mm[5];
+      const from = mm[6] ? [parseInt(mm[6],10), parseInt(mm[7],10)] : null;
+      if (!drop && !from) return { ok:false, reason:`${num}手目「${tok}」に移動元(カッコ内の数字)がない` };
+      const toKey = to[0] + "," + to[1];
+      if (drop) {
+        const code = PIECE_CODE[piece];
+        if (!code || !(hands[turn][code] > 0)) return { ok:false, reason:`${num}手目「${tok}」は持っていない駒を打っている` };
+        if (board[toKey]) return { ok:false, reason:`${num}手目「${tok}」は駒のあるマスに打っている` };
+      } else {
+        const cell = board[from[0] + "," + from[1]];
+        if (!cell || cell[0] !== turn || cell[1] !== piece) return { ok:false, reason:`${num}手目「${tok}」は盤面と合わない(その位置に動かす駒がない)` };
+        if (board[toKey] && board[toKey][0] === turn) return { ok:false, reason:`${num}手目「${tok}」は自分の駒のあるマスへ動いている` };
+        if (promote && !PROMOTED_OF_BASE[piece]) return { ok:false, reason:`${num}手目「${tok}」は成れない駒を成っている` };
+      }
+      const mv = { to, piece, promote, drop, from };
+      applyMove(board, hands, turn, mv);
+      turn = turn === "S" ? "G" : "S";
+      lastTo = to;
+      tokens.push(`${"１２３４５６７８９"[to[0]-1]}${"一二三四五六七八九"[to[1]-1]}${piece}${promote ? "成" : ""}${drop ? "打" : ""}${from ? "(" + from[0] + from[1] + ")" : ""}`);
+      continue;
+    }
+    m = /^([^：:\s]+)[：:]\s*(.*)$/.exec(t);
+    if (m && !started) {
+      if (!(m[1] in headers)) headers[m[1]] = m[2].trim();
+      if (m[1] === "手合割" && m[2].trim() && m[2].trim() !== "平手") return { ok:false, reason:`手合割「${m[2].trim()}」は未対応(平手のみ)` };
+      if (m[1] === "下手" || m[1] === "上手") return { ok:false, reason:"駒落ちの棋譜は未対応(平手のみ)" };
+      continue;
+    }
+  }
+  if (diagram) return { ok:false, reason:"盤面図から始まる棋譜(途中局面)は未対応" };
+  const hname = headers["手合割"];
+  if (hname && hname !== "平手") return { ok:false, reason:`手合割「${hname}」は未対応(平手のみ)` };
+  if (headers["下手"] || headers["上手"]) return { ok:false, reason:"駒落ちの棋譜は未対応(平手のみ)" };
+  if (tokens.length === 0) return { ok:false, reason:"指し手が見つからなかった" };
+  return { ok:true, parsed: {
+    startTime: kif2NormStartTime(headers["開始日時"]),
+    sente: headers["先手"] || null, gote: headers["後手"] || null,
+    jikan: headers["持ち時間"] || headers["棋戦"] || null,
+    moveTokens: tokens, resignMoveNum: endNum, endReason, winner, src: "kif",
+  } };
+}
+/* .kif用の勝敗: 「まで…手で○手の勝ち」を優先し、無ければ終局の言葉から決める。引き分け・中断は判定なし */
+function computeResultKif(parsed, tktSide) {
+  if (!tktSide) return null;
+  let w = parsed.winner;
+  if (!w && parsed.resignMoveNum != null && parsed.endReason) {
+    const moverIsS = (parsed.resignMoveNum % 2 === 1); // 終局の言葉が出た手番
+    const r = parsed.endReason;
+    if (["投了","詰み","詰","切れ負け","反則負け","不戦敗","time-up"].includes(r)) w = moverIsS ? "G" : "S";
+    else if (["反則勝ち","入玉勝ち","不戦勝"].includes(r)) w = moverIsS ? "S" : "G";
+  }
+  if (!w) return null;
+  return w === tktSide ? "win" : "lose";
+}
+/* 画面で手動指定された結果(override: ""=自動 / "win" / "lose" / "none")を反映した結果 */
+function kifEffResult(item) {
+  if (!item.tktSide) return null;
+  if (item.override === "win") return "win";
+  if (item.override === "lose") return "lose";
+  if (item.override === "none") return null;
+  return computeResultKif(item.parsed, item.tktSide);
+}
+function kifIsDup(p, batchKeys) {
+  const key = p.moveTokens.join(",") + "|" + (p.sente||"") + "|" + (p.gote||"");
+  let dup = false;
+  if (p.startTime) dup = GAMES.some(g => g.startTime === p.startTime) || batchKeys.has("T" + p.startTime);
+  else dup = GAMES.some(g => !g.startTime && (g.moveTokens||[]).join(",") + "|" + (g.sente||"") + "|" + (g.gote||"") === key) || batchKeys.has("M" + key);
+  batchKeys.add(p.startTime ? "T" + p.startTime : "M" + key);
+  return dup;
+}
+let kifSkipped = []; // 取り込めなかったファイル [{name, reason}]
+function kifMyNameSide(p) {
+  const isMe = n => MYNAMES.some(x => x && x.trim() === (n||"").trim());
+  return isMe(p.sente) ? "S" : isMe(p.gote) ? "G" : null;
+}
+function kifLoadTexts(items) { // items: [{name, text}]
+  const batchKeys = new Set();
+  const keep = pendingImports.filter(i => i.src === "kif" ? false : true);
+  kifSkipped = [];
+  const added = [];
+  items.forEach(({ name, text }) => {
+    const r = parseKifGame(text);
+    if (!r.ok) { kifSkipped.push({ name, reason: r.reason }); return; }
+    const p = r.parsed;
+    const dup = kifIsDup(p, batchKeys);
+    const tktSide = kifMyNameSide(p);
+    added.push({ parsed: p, tktSide, override: "", result: computeResultKif(p, tktSide), kaikei: "", dup, src: "kif", fileName: name });
+  });
+  pendingImports = keep.concat(added);
+}
+
 /* ---------- 体験期間管理 ---------- */
 // 固定日付方式: この日付を過ぎたらロックする(日本時間 2026/10/01 0:00)
 const CUTOFF_DATE = new Date("2026-10-01T00:00:00+09:00");
@@ -709,9 +856,34 @@ function renderImportTab() {
         <button id="btnParse">読み込む</button>
       </div>
     </div>
+    <div class="card">
+      <label>ウォーズ以外の棋譜(.kif / .kifu ファイル。複数選択OK。ぴよ将棋・将棋倶楽部24・ShogiGUIなど)</label>
+      <input type="file" id="kifFiles" multiple>
+      <label style="margin-top:10px;">またはKIF形式のテキストを貼り付け(1回に1局)</label>
+      <textarea id="kifText" placeholder="手合割：平手 などから始まるKIF形式の棋譜を貼り付け"></textarea>
+      <div style="margin-top:8px;"><button id="btnKifParse">KIFを読み込む</button></div>
+      <div class="hint" style="margin-top:6px;">平手の棋譜だけ読める。変化・コメントは無視して本譜だけ取り込む。取り込み後、各対局で「自分は先手/後手/不明」を選ぶ(勝敗の集計に使う)。終局の行がない棋譜は、結果の欄で「勝ちにする/負けにする」を選べる。</div>
+    </div>
     <div id="importPreview"></div>
   `;
+  document.getElementById("btnKifParse").onclick = async () => {
+    const items = [];
+    const files = Array.from(document.getElementById("kifFiles").files || []);
+    for (const f of files) {
+      try { items.push({ name: f.name, text: decodeKifBytes(new Uint8Array(await f.arrayBuffer())) }); }
+      catch (e) { kifSkipped.push({ name: f.name, reason: "ファイルを読めなかった" }); }
+    }
+    const pasted = document.getElementById("kifText").value;
+    if (pasted.trim()) items.push({ name: "貼り付け", text: pasted });
+    if (items.length === 0) {
+      document.getElementById("importPreview").innerHTML = `<div class="warn">ファイルを選ぶか、KIF形式のテキストを貼り付けてほしい。</div>`;
+      return;
+    }
+    kifLoadTexts(items);
+    renderImportPreview();
+  };
   document.getElementById("btnParse").onclick = () => {
+    kifSkipped = [];
     const text = document.getElementById("importText").value;
     const blocks = splitBlocks(text);
     if (blocks.length === 0) {
@@ -734,15 +906,25 @@ function renderImportTab() {
 
 function renderImportPreview() {
   const box = document.getElementById("importPreview");
-  if (pendingImports.length === 0) { box.innerHTML = ""; return; }
+  if (pendingImports.length === 0 && kifSkipped.length === 0) { box.innerHTML = ""; return; }
   const dupCount = pendingImports.filter(i => i.dup).length;
   const newCount = pendingImports.length - dupCount;
-  const unknownCount = pendingImports.filter(i => !i.dup && !i.tktSide).length;
-  let html = `<div class="card"><div class="small" style="margin-bottom:8px;">${pendingImports.length}局検出${dupCount ? `(うち重複${dupCount}局は保存されません)` : ""}。` +
+  const unknownCount = pendingImports.filter(i => !i.dup && !i.tktSide && i.src !== "kif").length;
+  const kifUnsetCount = pendingImports.filter(i => !i.dup && !i.tktSide && i.src === "kif").length;
+  let html = "";
+  if (kifSkipped.length) {
+    html += `<div class="warn" style="margin-bottom:8px;"><b>取り込めなかった棋譜 ${kifSkipped.length}件</b>` + kifSkipped.map(k => `<div class="small">${k.name}: ${k.reason}</div>`).join("") + `</div>`;
+  }
+  if (pendingImports.length === 0) { box.innerHTML = html; return; }
+  html += `<div class="card"><div class="small" style="margin-bottom:8px;">${pendingImports.length}局検出${dupCount ? `(うち重複${dupCount}局は保存されません)` : ""}。` +
     (newCount ? `保存される${newCount}局に戦型タグを入力して「保存」を押してほしい(空欄でも保存可、後から変更可)。` : `すべて重複のため、保存する対局はありません。`) + `</div>`;
   if (unknownCount) {
     html += `<div class="warn" style="margin-bottom:8px;">${unknownCount}局が「先後不明」(勝敗が付かず、勝率に入らない)。` +
       (MYNAMES.length ? `登録済みのID(${MYNAMES.join(", ")})がこの棋譜に出てこない。IDの綴りを確認してほしい。` : `自分の将棋ウォーズIDが未登録。先に「設定」タブでIDを登録してから、もう一度読み込んでほしい。`) + `</div>`;
+  }
+  if (kifUnsetCount) {
+    html += `<div class="warn" style="margin-bottom:8px;">${kifUnsetCount}局は「自分の先後」が未選択(勝敗が付かず、勝率に入らない)。各対局で選ぶか、まとめて設定してほしい。` +
+      `<div style="margin-top:6px;">まとめて: <button class="secondary kifAllSide" data-side="S">全部 自分=先手</button> <button class="secondary kifAllSide" data-side="G">全部 自分=後手</button></div></div>`;
   }
   pendingImports.forEach((item, idx) => {
     const p = item.parsed;
@@ -753,7 +935,7 @@ function renderImportPreview() {
     html += `<div class="row" style="margin-bottom:8px; border-bottom:1px solid var(--border); padding-bottom:8px;">
       <div style="flex:1; min-width:220px;">
         <div class="small">${p.startTime || "(日時不明)"} ｜ ${p.sente || "?"} vs ${p.gote || "?"} ｜ ${p.jikan || ""}</div>
-        <div class="small">先後: ${sideLabel} ／ 結果: <b style="color:${resultColor};">${resultLabel}</b> ／ 手数: ${p.moveTokens.length}${p.endReason ? "("+p.endReason+")" : "(終局未検出)"}</div>
+        <div class="small">${item.src === "kif" ? `<span class="small">${item.fileName || ""}</span> ｜ ` : ""}先後: ${item.src === "kif" ? `<select class="kifSide" data-idx="${idx}"><option value=""${!item.tktSide?" selected":""}>自分は不明</option><option value="S"${item.tktSide==="S"?" selected":""}>自分=先手</option><option value="G"${item.tktSide==="G"?" selected":""}>自分=後手</option></select>` : sideLabel} ／ 結果: <b id="kifRes${idx}" style="color:${resultColor};">${resultLabel}</b>${item.src === "kif" ? ` <select class="kifOv" data-idx="${idx}"${!item.tktSide?" disabled":""}><option value=""${!item.override?" selected":""}>自動</option><option value="win"${item.override==="win"?" selected":""}>勝ちにする</option><option value="lose"${item.override==="lose"?" selected":""}>負けにする</option><option value="none"${item.override==="none"?" selected":""}>勝敗なし</option></select>` : ""} ／ 手数: ${p.moveTokens.length}${p.endReason ? "("+p.endReason+")" : "(終局未検出)"}</div>
       </div>
       <input type="text" list="kaikeiHints" placeholder="戦型タグ(任意)" style="width:200px;" data-idx="${idx}" class="kaikeiInput">
     </div>`;
@@ -770,6 +952,26 @@ function renderImportPreview() {
   if (newCount) html += `<button id="btnSaveImports">この内容で保存</button>`;
   html += `</div>`;
   box.innerHTML = html;
+  const kifApplySide = (idx, side) => {
+    const it = pendingImports[idx]; if (!it) return;
+    it.tktSide = side || null;
+    if (!it.tktSide) it.override = "";
+    it.result = kifEffResult(it);
+    const ov = box.querySelector(`.kifOv[data-idx="${idx}"]`);
+    if (ov) { ov.disabled = !it.tktSide; if (!it.tktSide) ov.value = ""; }
+    const el2 = document.getElementById("kifRes" + idx);
+    if (el2) { el2.textContent = it.result === "win" ? "勝ち" : it.result === "lose" ? "負け" : "判定不可"; el2.style.color = it.result === "win" ? "var(--win)" : it.result === "lose" ? "var(--lose)" : "#999"; }
+  };
+  box.querySelectorAll(".kifSide").forEach(sel => { sel.onchange = (e) => kifApplySide(parseInt(e.target.dataset.idx,10), e.target.value); });
+  box.querySelectorAll(".kifOv").forEach(sel => { sel.onchange = (e) => {
+    const idx = parseInt(e.target.dataset.idx,10), it = pendingImports[idx]; if (!it) return;
+    it.override = e.target.value; it.result = kifEffResult(it);
+    const el2 = document.getElementById("kifRes" + idx);
+    if (el2) { el2.textContent = it.result === "win" ? "勝ち" : it.result === "lose" ? "負け" : "判定不可"; el2.style.color = it.result === "win" ? "var(--win)" : it.result === "lose" ? "var(--lose)" : "#999"; }
+  }; });
+  box.querySelectorAll(".kifAllSide").forEach(b => { b.onclick = () => {
+    pendingImports.forEach((it, i) => { if (it.src === "kif" && !it.dup) { kifApplySide(i, b.dataset.side); const sel = box.querySelector(`.kifSide[data-idx="${i}"]`); if (sel) sel.value = b.dataset.side; } });
+  }; });
   box.querySelectorAll(".kaikeiInput").forEach(inp => {
     inp.oninput = (e) => { pendingImports[e.target.dataset.idx].kaikei = e.target.value; };
   });
@@ -792,8 +994,9 @@ function renderImportPreview() {
       else if (res.kind === "DUPLICATE") { skippedDup++; }
       else { alert("保存に失敗した局がある: " + (res.error && res.error.message)); }
     }
-    pendingImports = [];
+    pendingImports = []; kifSkipped = [];
     document.getElementById("importText").value = "";
+    { const kt = document.getElementById("kifText"); if (kt) kt.value = ""; const kf = document.getElementById("kifFiles"); if (kf) kf.value = ""; }
     let msg = `${added}局を保存した。`;
     if (skippedDup) msg += `(重複${skippedDup}局は保存していない)`;
     if (limitHit) msg += ` 無料プランの上限(30局)に達したため、これ以上は保存できなかった。有料プランで解放できる。`;
