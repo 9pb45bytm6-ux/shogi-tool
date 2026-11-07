@@ -633,6 +633,264 @@ function kifLoadTexts(items) { // items: [{name, text}]
   pendingImports = keep.concat(added);
 }
 
+
+/* ---------- 手入力: 駒の動きと着手の生成 ----------
+   王手放置・打ち歩詰めは判定しない(駒の動き、成り、二歩、行き所のない駒だけ見る)。 */
+const ME_GOLD = ["金","と","成香","成桂","成銀"];
+function meStepSlide(piece, f) {
+  const O = [[0,-1],[0,1],[-1,0],[1,0]], D = [[-1,-1],[1,-1],[-1,1],[1,1]];
+  if (piece === "歩") return { step: [[0,f]], slide: [] };
+  if (piece === "香") return { step: [], slide: [[0,f]] };
+  if (piece === "桂") return { step: [[-1,2*f],[1,2*f]], slide: [] };
+  if (piece === "銀") return { step: [[-1,f],[0,f],[1,f],[-1,-f],[1,-f]], slide: [] };
+  if (ME_GOLD.includes(piece)) return { step: [[-1,f],[0,f],[1,f],[-1,0],[1,0],[0,-f]], slide: [] };
+  if (piece === "角") return { step: [], slide: D };
+  if (piece === "馬") return { step: O, slide: D };
+  if (piece === "飛") return { step: [], slide: O };
+  if (piece === "龍") return { step: D, slide: O };
+  return { step: O.concat(D), slide: [] }; // 玉
+}
+function meInZone(owner, r) { return owner === "S" ? r <= 3 : r >= 7; }
+function meDeadSquare(piece, owner, r) {
+  const last = owner === "S" ? 1 : 9, last2 = owner === "S" ? 2 : 8;
+  if (piece === "歩" || piece === "香") return r === last;
+  if (piece === "桂") return owner === "S" ? r <= 2 : r >= 8;
+  return false;
+}
+/* 手の一覧: [{from, to, piece, promote, drop}]  (from は [列,段]、打つ手は null) */
+function meGenMoves(board, hands, turn) {
+  const out = [], f = turn === "S" ? -1 : 1;
+  for (let c = 1; c <= 9; c++) for (let r = 1; r <= 9; r++) {
+    const cell = board[c + "," + r];
+    if (!cell || cell[0] !== turn) continue;
+    const piece = cell[1], { step, slide } = meStepSlide(piece, f);
+    const dests = [];
+    step.forEach(([dc, dr]) => { const tc = c + dc, tr = r + dr; if (tc>=1&&tc<=9&&tr>=1&&tr<=9) { const t = board[tc+","+tr]; if (!t || t[0] !== turn) dests.push([tc,tr]); } });
+    slide.forEach(([dc, dr]) => { let tc = c + dc, tr = r + dr; while (tc>=1&&tc<=9&&tr>=1&&tr<=9) { const t = board[tc+","+tr]; if (t && t[0] === turn) break; dests.push([tc,tr]); if (t) break; tc += dc; tr += dr; } });
+    dests.forEach(([tc, tr]) => {
+      const canProm = !!PROMOTED_OF_BASE[piece] && (meInZone(turn, r) || meInZone(turn, tr));
+      const must = meDeadSquare(piece, turn, tr);
+      if (!must) out.push({ from:[c,r], to:[tc,tr], piece, promote:false, drop:false });
+      if (canProm) out.push({ from:[c,r], to:[tc,tr], piece, promote:true, drop:false });
+    });
+  }
+  const h = hands[turn] || {};
+  Object.keys(h).forEach(code => {
+    if (!(h[code] > 0)) return;
+    const piece = CODE_TO_JP[code];
+    if (!piece || ["玉","と","杏","圭","全","馬","龍"].includes(piece)) return;
+    for (let c = 1; c <= 9; c++) {
+      if (piece === "歩") { let has = false; for (let r = 1; r <= 9; r++) { const x = board[c+","+r]; if (x && x[0] === turn && x[1] === "歩") has = true; } if (has) continue; }
+      for (let r = 1; r <= 9; r++) {
+        if (board[c+","+r] || meDeadSquare(piece, turn, r)) continue;
+        out.push({ from:null, to:[c,r], piece, promote:false, drop:true });
+      }
+    }
+  });
+  return out;
+}
+function meToken(mv) {
+  return `${"１２３４５６７８９"[mv.to[0]-1]}${"一二三四五六七八九"[mv.to[1]-1]}${mv.piece}${mv.promote ? "成" : ""}${mv.drop ? "打" : ""}${mv.from ? "(" + mv.from[0] + mv.from[1] + ")" : ""}`;
+}
+/* 文字1手 → 手。失敗なら {error} */
+function meResolveText(raw, st) {
+  const tok = kif2NormToken(raw);
+  const mm = KIF2_MOVE_RE.exec(tok);
+  if (!mm) return { error: `「${raw}」を読めなかった(例: ７六歩 / ▲7六歩 / 同銀 / ５八桂打 / ２二角成)` };
+  let to;
+  if (mm[1]) to = [ZEN2INT[mm[1]], KAN2INT[mm[2]]];
+  else { if (!st.lastTo) return { error: `「${raw}」の「同」の行き先が分からない(1手目や直前の手がない)` }; to = st.lastTo; }
+  const piece = KIF2_PIECE_ALIAS[mm[3]] || mm[3];
+  const wantProm = mm[4] === "成", drop = !!mm[5];
+  const from = mm[6] ? [parseInt(mm[6],10), parseInt(mm[7],10)] : null;
+  const all = meGenMoves(st.board, st.hands, st.turn).filter(x => x.to[0] === to[0] && x.to[1] === to[1] && x.piece === piece && x.drop === drop && (!from || (x.from && x.from[0] === from[0] && x.from[1] === from[1])));
+  const exact = all.filter(x => x.promote === wantProm);
+  if (exact.length === 1) return { mv: exact[0] };
+  if (exact.length > 1) return { error: `「${raw}」は動かせる駒が複数ある。移動元を付けて入力してほしい(例: ${mm[1]?mm[1]+mm[2]:"同"}${piece}(${exact.map(x=>x.from[0]+""+x.from[1]).join(")か(")}))` };
+  if (all.length) return { error: `「${raw}」は${wantProm ? "成れない手" : "成りが必要な手(「成」を付ける)"}` };
+  return { error: `「${raw}」は${st.turn === "S" ? "先手" : "後手"}の番では指せない手(動かせる駒がない・駒の動きに合わない・二歩など)` };
+}
+function meSplitText(text) {
+  const t = text.replace(/　/g, " ").replace(/同\s+/g, "同");
+  return t.split(/[\n,、]+|\s+|(?=[▲△☗☖])/).filter(Boolean)
+    .map(x => x.replace(/^[▲△☗☖]/, "").replace(/^\d+[.．:：)](?=\S)/, ""))
+    .filter(x => x && !/^\d+[.．:：)]?$/.test(x));
+}
+
+
+/* ---------- 手入力: 画面 ---------- */
+let ME = null;
+function meReset() {
+  ME = { board: initialBoard(), hands: { S:{}, G:{} }, turn: "S", lastTo: null, tokens: [], history: [], sel: null, prompt: null, ended: null, msg: "" };
+}
+function meSide(t) { return t === "S" ? "先手" : "後手"; }
+function meCommit(mv) {
+  ME.history.push({ board: cloneBoard(ME.board), hands: cloneHands(ME.hands), turn: ME.turn, lastTo: ME.lastTo });
+  applyMove(ME.board, ME.hands, ME.turn, mv);
+  ME.tokens.push(meToken(mv));
+  ME.turn = ME.turn === "S" ? "G" : "S";
+  ME.lastTo = mv.to; ME.sel = null; ME.prompt = null; ME.msg = "";
+}
+function meUndo() {
+  if (ME.ended) { ME.ended = null; return; }
+  const h = ME.history.pop(); if (!h) return;
+  ME.board = h.board; ME.hands = h.hands; ME.turn = h.turn; ME.lastTo = h.lastTo; ME.tokens.pop(); ME.sel = null; ME.prompt = null; ME.msg = "";
+}
+function meRenderBoard() {
+  const box = document.getElementById("meBoard"); if (!box) return;
+  const legal = ME.ended ? [] : meGenMoves(ME.board, ME.hands, ME.turn);
+  let dests = [];
+  if (ME.sel && ME.sel.type === "sq") dests = legal.filter(x => x.from && x.from[0] === ME.sel.c && x.from[1] === ME.sel.r).map(x => x.to[0] + "," + x.to[1]);
+  if (ME.sel && ME.sel.type === "drop") dests = legal.filter(x => x.drop && x.piece === ME.sel.piece).map(x => x.to[0] + "," + x.to[1]);
+  const handHtml = (side) => {
+    const h = ME.hands[side] || {};
+    const items = HAND_ORDER.filter(k => h[k]).map(k => {
+      const on = !ME.ended && ME.turn === side;
+      const sel = ME.sel && ME.sel.type === "drop" && ME.sel.piece === CODE_TO_JP[k] && ME.turn === side;
+      return `<span class="meHand" data-side="${side}" data-code="${k}" style="display:inline-block; padding:3px 7px; margin:2px; border:1px solid var(--border); border-radius:5px; font-family:serif; font-weight:700; ${on ? "cursor:pointer; background:#fff;" : "opacity:.6;"} ${sel ? "outline:2px solid var(--accent);" : ""}">${CODE_TO_JP[k]}${h[k] > 1 ? "×" + h[k] : ""}</span>`;
+    });
+    return `<div class="small" style="min-height:28px;">${meSide(side)} 持駒: ${items.length ? items.join("") : "なし"}</div>`;
+  };
+  let html = `<div style="display:inline-block;">` + handHtml("G");
+  html += `<table class="board-table"><tr><td class="label"></td>`;
+  FILES.forEach(f => html += `<td class="label">${f}</td>`);
+  html += `</tr>`;
+  for (let ri = 0; ri < 9; ri++) {
+    const row = ri + 1;
+    html += `<tr><td class="label">${RANKS[ri]}</td>`;
+    FILES.forEach(col => {
+      const cell = ME.board[col + "," + row];
+      const isSel = ME.sel && ME.sel.type === "sq" && ME.sel.c === col && ME.sel.r === row;
+      const isDest = dests.includes(col + "," + row);
+      const isLast = ME.lastTo && ME.lastTo[0] === col && ME.lastTo[1] === row;
+      let st = "width:34px; height:36px; cursor:pointer;";
+      if (isSel) st += " background:#f3d98b;"; else if (isDest) st += " background:#cfe8c9;"; else if (isLast) st += " background:#f6ecc9;";
+      let inner = "";
+      if (cell) inner = cell[0] === "G" ? `<span class="gote-piece">${dispPiece(cell[1])}</span>` : dispPiece(cell[1]);
+      html += `<td class="meCell" data-c="${col}" data-r="${row}" style="${st}">${inner}</td>`;
+    });
+    html += `</tr>`;
+  }
+  html += `</table>` + handHtml("S") + `</div>`;
+  if (ME.prompt) {
+    html += `<div class="warn" style="margin-top:8px;">成りますか? <button class="mePromo" data-p="1">成る</button> <button class="secondary mePromo" data-p="0">成らない</button></div>`;
+  }
+  box.innerHTML = html;
+  const stEl = document.getElementById("meStatus");
+  if (stEl) {
+    const last = ME.tokens.length ? ME.tokens[ME.tokens.length - 1] : "なし";
+    stEl.innerHTML = ME.ended
+      ? `<b>入力を終えた:</b> ${ME.ended.text}(${ME.tokens.length}手)`
+      : `${ME.tokens.length}手入力済み ／ 次は<b>${meSide(ME.turn)}</b>の番 ／ 直前の手: ${last}`;
+  }
+  const msgEl = document.getElementById("meMsg"); if (msgEl) msgEl.innerHTML = ME.msg ? `<div class="warn" style="margin-top:6px;">${ME.msg}</div>` : "";
+  const send = document.getElementById("meSend"); if (send) send.disabled = ME.tokens.length === 0;
+  box.querySelectorAll(".meCell").forEach(td => { td.onclick = () => meTapCell(parseInt(td.dataset.c,10), parseInt(td.dataset.r,10)); });
+  box.querySelectorAll(".meHand").forEach(sp => { sp.onclick = () => meTapHand(sp.dataset.side, sp.dataset.code); });
+  box.querySelectorAll(".mePromo").forEach(b => { b.onclick = () => {
+    const pr = ME.prompt; if (!pr) return;
+    const want = b.dataset.p === "1";
+    const mv = pr.cands.find(x => x.promote === want); if (mv) meCommit(mv);
+    meRenderBoard();
+  }; });
+}
+function meTapCell(c, r) {
+  if (ME.ended || ME.prompt) return;
+  const legal = meGenMoves(ME.board, ME.hands, ME.turn);
+  if (ME.sel) {
+    let cands = [];
+    if (ME.sel.type === "sq") cands = legal.filter(x => x.from && x.from[0] === ME.sel.c && x.from[1] === ME.sel.r && x.to[0] === c && x.to[1] === r);
+    else cands = legal.filter(x => x.drop && x.piece === ME.sel.piece && x.to[0] === c && x.to[1] === r);
+    if (cands.length === 1) { meCommit(cands[0]); meRenderBoard(); return; }
+    if (cands.length === 2) { ME.prompt = { cands }; meRenderBoard(); return; }
+  }
+  const cell = ME.board[c + "," + r];
+  if (cell && cell[0] === ME.turn) {
+    if (ME.sel && ME.sel.type === "sq" && ME.sel.c === c && ME.sel.r === r) ME.sel = null;
+    else ME.sel = { type: "sq", c, r };
+  } else ME.sel = null;
+  ME.msg = "";
+  meRenderBoard();
+}
+function meTapHand(side, code) {
+  if (ME.ended || ME.prompt || side !== ME.turn) return;
+  const piece = CODE_TO_JP[code];
+  ME.sel = (ME.sel && ME.sel.type === "drop" && ME.sel.piece === piece) ? null : { type: "drop", piece };
+  ME.msg = "";
+  meRenderBoard();
+}
+function meAddText(text) {
+  const toks = meSplitText(text);
+  if (!toks.length) { ME.msg = "入力する手がない。"; return 0; }
+  let n = 0;
+  for (const t of toks) {
+    if (ME.ended) { ME.msg = `「${t}」: すでに入力を終えている(先に「1手戻す」で終了を取り消す)`; break; }
+    if (/^投了/.test(t)) { meResign(ME.turn); n++; continue; }
+    const r = meResolveText(t, ME);
+    if (r.error) { ME.msg = `${n}手までは入力した。${r.error}`; break; }
+    meCommit(r.mv); n++;
+  }
+  if (n && !ME.msg) ME.msg = "";
+  return n;
+}
+function meResign(side) {
+  if (ME.ended) return;
+  const win = side === "S" ? "G" : "S";
+  ME.ended = { reason: "投了", winner: win, text: `${meSide(side)}投了(${meSide(win)}の勝ち)` };
+  ME.sel = null; ME.prompt = null;
+}
+function meSendToPreview() {
+  if (!ME || ME.tokens.length === 0) return;
+  const g = n => { const v = (document.getElementById(n) || {}).value; return v && v.trim() ? v.trim() : null; };
+  const p = { startTime: null, sente: g("meSente"), gote: g("meGote"), jikan: null, moveTokens: ME.tokens.slice(),
+    resignMoveNum: ME.ended ? ME.tokens.length + 1 : null, endReason: ME.ended ? ME.ended.reason : null, winner: ME.ended ? ME.ended.winner : null, src: "kif" };
+  const keys = new Set();
+  pendingImports.forEach(i => { if (i.src === "kif" && !i.dup) keys.add(i.parsed.startTime ? "T" + i.parsed.startTime : "M" + i.parsed.moveTokens.join(",") + "|" + (i.parsed.sente||"") + "|" + (i.parsed.gote||"")); });
+  const dup = kifIsDup(p, keys);
+  const tktSide = kifMyNameSide(p);
+  pendingImports.push({ parsed: p, tktSide, override: "", result: computeResultKif(p, tktSide), kaikei: "", dup, src: "kif", fileName: "手入力" });
+  meReset();
+  renderImportPreview();
+  meRenderBoard();
+  const pv = document.getElementById("importPreview"); if (pv && pv.scrollIntoView) pv.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function meCardHTML() {
+  return `<div class="card" id="manualCard">
+    <label>棋譜を手で入力(盤をタップ、または文字で入力)</label>
+    <div class="row" style="margin-bottom:6px;">
+      <input type="text" id="meSente" placeholder="先手の名前(任意)" style="width:150px;">
+      <input type="text" id="meGote" placeholder="後手の名前(任意)" style="width:150px;">
+    </div>
+    <div id="meBoard"></div>
+    <div id="meStatus" class="small" style="margin:6px 0;"></div>
+    <div class="row" style="margin-bottom:6px;">
+      <button class="secondary" id="meUndo">1手戻す</button>
+      <button class="secondary" id="meResign_S">先手投了</button>
+      <button class="secondary" id="meResign_G">後手投了</button>
+      <button class="secondary" id="meEnd">ここで終える(結果は後で選ぶ)</button>
+      <button class="secondary" id="meClear">全部消す</button>
+    </div>
+    <label>文字で入力(1手ずつでも、まとめて貼り付けでもOK)</label>
+    <textarea id="meText" style="min-height:70px;" placeholder="例: ▲7六歩 △3四歩 ▲2二角成 △同銀 ▲4五角打　(同銀・打・成に対応。「投了」で終了)"></textarea>
+    <div style="margin-top:6px;"><button id="meAddText">文字の手を追加</button></div>
+    <div id="meMsg"></div>
+    <div style="margin-top:10px;"><button id="meSend" disabled>この棋譜を確認へ(自分の先後・結果・戦型を選ぶ)</button></div>
+    <div class="hint" style="margin-top:6px;">王手放置・打ち歩詰めは判定しない(駒の動き・成り・二歩・行き所のない駒だけ確認)。開始日時なしで保存し、同じ棋譜かどうかは指し手と名前で調べる。</div>
+  </div>`;
+}
+function meBind() {
+  if (!ME) meReset();
+  const $ = id => document.getElementById(id);
+  $("meUndo").onclick = () => { meUndo(); meRenderBoard(); };
+  $("meResign_S").onclick = () => { if (ME.tokens.length === 0) { ME.msg = "指し手を入力してから投了を押してほしい。"; } else meResign("S"); meRenderBoard(); };
+  $("meResign_G").onclick = () => { if (ME.tokens.length === 0) { ME.msg = "指し手を入力してから投了を押してほしい。"; } else meResign("G"); meRenderBoard(); };
+  $("meEnd").onclick = () => { if (ME.tokens.length === 0) { ME.msg = "指し手を入力してから押してほしい。"; } else if (!ME.ended) { ME.ended = { reason: null, winner: null, text: "終局の指定なし(結果は確認の画面で選ぶ)" }; ME.sel = null; ME.prompt = null; } meRenderBoard(); };
+  $("meClear").onclick = () => { meReset(); meRenderBoard(); };
+  $("meAddText").onclick = () => { const n = meAddText($("meText").value); if (n && !ME.msg) $("meText").value = ""; else if (n && ME.msg) { /* 途中で止まった: 入力欄は残す */ } meRenderBoard(); };
+  $("meSend").onclick = meSendToPreview;
+  meRenderBoard();
+}
+
 /* ---------- 体験期間管理 ---------- */
 // 固定日付方式: この日付を過ぎたらロックする(日本時間 2026/10/01 0:00)
 const CUTOFF_DATE = new Date("2026-10-01T00:00:00+09:00");
@@ -864,8 +1122,10 @@ function renderImportTab() {
       <div style="margin-top:8px;"><button id="btnKifParse">KIFを読み込む</button></div>
       <div class="hint" style="margin-top:6px;">平手の棋譜だけ読める。変化・コメントは無視して本譜だけ取り込む。取り込み後、各対局で「自分は先手/後手/不明」を選ぶ(勝敗の集計に使う)。終局の行がない棋譜は、結果の欄で「勝ちにする/負けにする」を選べる。</div>
     </div>
+    ${meCardHTML()}
     <div id="importPreview"></div>
   `;
+  meBind();
   document.getElementById("btnKifParse").onclick = async () => {
     const items = [];
     const files = Array.from(document.getElementById("kifFiles").files || []);
