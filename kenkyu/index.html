@@ -2105,11 +2105,11 @@ function renderListTab() {
   }
   html += `<div class="row" style="margin-bottom:8px;">
     <button class="secondary" id="btnMergeSelected" disabled>選択した2件を統合</button>
-    <span class="small">統合したい研究を2件チェックする</span>
+    <span class="small">統合したい研究を2件チェックする / 行をダブルタップ(ダブルクリック)で開く</span>
   </div>`;
   html += `<div style="overflow-x:auto;"><table class="data"><thead><tr><th></th><th>タイトル</th><th>自分側</th><th>タグ</th><th>開始</th><th>作成日</th><th></th></tr></thead><tbody>`;
   list.slice().reverse().filter(r => !LIST_TAG_FILTER || (r.tags || []).includes(LIST_TAG_FILTER)).forEach(r => {
-    html += `<tr>
+    html += `<tr data-rowid="${r.id}" style="touch-action:manipulation; -webkit-user-select:none; user-select:none; cursor:pointer;">
       <td><input type="checkbox" data-selid="${r.id}"></td>
       <td class="wrap">${r.title || "(無題)"}</td>
       <td>${r.side==="S"?"先手側":r.side==="G"?"後手側":"未設定"}</td>
@@ -2153,14 +2153,29 @@ function renderListTab() {
     await saveResearches(newList);
     renderListTab();
   };
+  const openById = (id) => {
+    const list2 = loadResearches();
+    const found = list2.find(r => String(r.id)===String(id));
+    if (!found) return;
+    openResearch(found);
+    switchTab("editor");
+  };
   el.querySelectorAll("[data-openid]").forEach(btn => {
-    btn.onclick = () => {
-      const list2 = loadResearches();
-      const found = list2.find(r => String(r.id)===btn.dataset.openid);
-      if (!found) return;
-      openResearch(found);
-      switchTab("editor");
-    };
+    btn.onclick = () => openById(btn.dataset.openid);
+  });
+  // 行のダブルタップ/ダブルクリックで開く(チェックボックス・ボタン・タグ上は除く)
+  let lastTap = { id: null, t: 0 };
+  el.querySelectorAll("tr[data-rowid]").forEach(tr => {
+    tr.addEventListener("click", (e) => {
+      if (e.target.closest("button, input, .chip")) { lastTap = { id: null, t: 0 }; return; }
+      const now = Date.now(), id = tr.dataset.rowid;
+      if (lastTap.id === id && now - lastTap.t < 400) {
+        lastTap = { id: null, t: 0 };
+        openById(id);
+      } else {
+        lastTap = { id, t: now };
+      }
+    });
   });
   el.querySelectorAll("[data-delid]").forEach(btn => {
     btn.onclick = async () => {
