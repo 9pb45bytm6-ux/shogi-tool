@@ -95,14 +95,17 @@ button:disabled{opacity:.4;cursor:default}
       <select id="sSide"><option value="s">先手(下から)</option><option value="g">後手</option><option value="r">ランダム</option></select>
     </label>
     <label>CPUの強さ
-      <select id="sLvl"><option value="0">よわい(でたらめ)</option><option value="1">ふつう(2手読み)</option><option value="2">つよめ(3手読み)</option><option value="3">つよい(1手 最大約2秒)</option><option value="4">最強(1手 最大約5秒)</option></select>
+      <select id="sLvl"><option value="0">よわい(でたらめ)</option><option value="1">ふつう(2手読み)</option><option value="2">つよめ(3手読み)</option><option value="3">つよい(1手 最大約2秒)</option><option value="4">最強(1手 最大約5秒)</option><option value="5">超強(1手 最大約15秒)</option><option value="6">極限(1手 最大約30秒)</option></select>
     </label>
     <label>反則のルール
       <select id="sMiss">
-        <option value="strike">動けない所を押す3回で負け</option>
+        <option value="strike">反則回数で負け</option>
         <option value="hint">自分の駒の行き先を表示</option>
         <option value="free">ヒントなし・何度でも押せる</option>
       </select>
+    </label>
+    <label id="lMax">反則の上限回数(1〜99)
+      <input id="sMax" type="number" inputmode="numeric" min="1" max="99" step="1" value="3">
     </label>
     <label class="full">配置コード(空欄ならランダム。同じ数字なら同じ見た目の配置)
       <input id="sSeed" inputmode="numeric" placeholder="例: 12345">
@@ -133,7 +136,7 @@ button:disabled{opacity:.4;cursor:default}
   <div class="row"><button class="primary" id="bAgain">同じ配置でもう一度</button><button id="bNew2">新しい配置で</button><button id="bClose">盤面を見る</button></div></div></div>
 <div id="toast"></div>
 
-<script>
+<script id="workerSrc" type="text/plain">
 /* ===== ガワ将棋 ルールエンジン(画面に依存しない) =====
    盤: 81マスの配列。index = 段(0=最上段)*9 + 筋の列(0=9筋 … 8=1筋)
    駒: {id, k:本当の種類, p:成りフラグ, o:持ち主(0=先手,1=後手), f:見た目}
@@ -223,7 +226,7 @@ function apply(s, m) {
   const b = s.b.slice(), h = [s.h[0], s.h[1]], kp = s.kp.slice(), o = s.t;
   if (m.from < 0) {
     b[m.to] = m.pc;
-    h[o] = h[o].filter(x => x !== m.pc);
+    h[o] = h[o].filter(x => x.id !== m.pc.id);
   } else {
     let pc = b[m.from];
     const cap = b[m.to];
@@ -469,9 +472,393 @@ function cpuSearch(s, ms) {
   } catch (err) { if (err !== TIMEUP) throw err; }
   return best;
 }
-const LEVEL_MS = { 3: 2000, 4: 5000 };
+const LEVEL_MS = { 3: 2000, 4: 5000, 5: 15000, 6: 30000 };
 
-/* level 0: ランダム / 1: 2手読み / 2: 3手読み / 3: 最大約2秒 / 4: 最大約5秒 */
+/* level 0: ランダム / 1: 2手読み / 2: 3手読み / 3: 最大約2秒 / 4: 最大約5秒 / 5: 約15秒 / 6: 約30秒 */
+function cpuPick(s, level, rnd, msOverride) {
+  const mv = legalMoves(s);
+  if (!mv.length) return null;
+  if (level === 0) return mv[Math.floor(rnd() * mv.length)];
+  if (level >= 3 && s.n >= 6) return cpuSearch(s, msOverride || LEVEL_MS[level]);
+  const depth = level === 1 ? 2 : 3;   // 強い設定でも序盤の数手は3手読み+ゆらぎ(毎回同じ展開にならないように)
+  let bestV = -Infinity, bests = [];
+  for (const m of orderMoves(s, mv)) {
+    const v = -negamax(apply(s, m), depth - 1, -Infinity, Infinity, 1) + rnd() * 6;
+    if (v > bestV + 8) { bestV = v; bests = [m]; }
+    else if (v > bestV - 8) { if (v > bestV) bestV = v; bests.push(m); }
+  }
+  return bests[Math.floor(rnd() * bests.length)];
+}
+
+/* ===== 乱数・シャッフル ===== */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function shuffle(arr, rnd) {
+  for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; }
+  return arr;
+}
+function hashSeed(str) {
+  if (/^\d+$/.test(str)) return parseInt(str, 10) % 2147483647;
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0) % 2147483647;
+}
+/* ===== 表示用の文字 ===== */
+const FACE_G = { OU: '王', GY: '玉', R: '飛', B: '角', G: '金', S: '銀', N: '桂', L: '香', P: '歩' };
+const FACE_PG = { OU: '王', GY: '玉', R: '龍', B: '馬', G: '金', S: '全', N: '圭', L: '杏', P: 'と' };
+const TRUE_G = { K: '玉', R: '飛', B: '角', G: '金', S: '銀', N: '桂', L: '香', P: '歩' };
+const TRUE_PG = { K: '玉', R: '龍', B: '馬', G: '金', S: '全', N: '圭', L: '杏', P: 'と' };
+function faceGlyph(pc) { return (pc.p ? FACE_PG : FACE_G)[pc.f]; }
+function trueGlyph(pc) { return (pc.p ? TRUE_PG : TRUE_G)[pc.k]; }
+if (typeof module !== 'undefined') module.exports = { cpuSearch, initState, legalMoves, hasLegal, apply, sig, inCheck, attacked, FACE_BAG, shuffle, mulberry32, hashSeed, cpuPick, faceGlyph, trueGlyph, gen };
+
+self.onmessage = function (e) { var d = e.data; self.postMessage({ id: d.id, m: cpuPick(d.s, d.lvl, Math.random) }); };
+</script>
+<script>
+/* ===== ガワ将棋 ルールエンジン(画面に依存しない) =====
+   盤: 81マスの配列。index = 段(0=最上段)*9 + 筋の列(0=9筋 … 8=1筋)
+   駒: {id, k:本当の種類, p:成りフラグ, o:持ち主(0=先手,1=後手), f:見た目}
+   駒は不変オブジェクト(成る・取るたびに新しいオブジェクトを作る)
+*/
+const DIRS8 = [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]];
+const OPPD = [1,0,3,2,7,6,5,4];
+const KS = ['K','R','B','G','S','N','L','P'];
+const KI = {K:0,R:1,B:2,G:3,S:4,N:5,L:6,P:7};
+const PROK = {R:1,B:1,S:1,N:1,L:1,P:1};
+const VEC = [];
+function dIdx(dr, dc) { for (let i = 0; i < 8; i++) if (DIRS8[i][0] === dr && DIRS8[i][1] === dc) return i; return -1; }
+(function buildVec() {
+  for (let o = 0; o < 2; o++) {
+    const f = o === 0 ? -1 : 1;
+    for (const k of KS) for (let p = 0; p < 2; p++) {
+      let step = [], slide = [];
+      const gold = (k === 'G') || (p && (k === 'S' || k === 'N' || k === 'L' || k === 'P'));
+      if (gold) step = [[f,0],[f,-1],[f,1],[0,-1],[0,1],[-f,0]];
+      else if (k === 'K') step = DIRS8.map(d => d.slice());
+      else if (k === 'S') step = [[f,0],[f,-1],[f,1],[-f,-1],[-f,1]];
+      else if (k === 'N') step = [[2*f,-1],[2*f,1]];
+      else if (k === 'L') slide = [[f,0]];
+      else if (k === 'P') step = [[f,0]];
+      else if (k === 'B') { slide = [[-1,-1],[-1,1],[1,-1],[1,1]]; if (p) step = [[-1,0],[1,0],[0,-1],[0,1]]; }
+      else if (k === 'R') { slide = [[-1,0],[1,0],[0,-1],[0,1]]; if (p) step = [[-1,-1],[-1,1],[1,-1],[1,1]]; }
+      let sm = 0, lm = 0;
+      for (const [a, b] of step) { const d = dIdx(a, b); if (d >= 0) sm |= 1 << d; }
+      for (const [a, b] of slide) { lm |= 1 << dIdx(a, b); }
+      VEC[o * 16 + KI[k] * 2 + p] = { step, slide, sm, lm };
+    }
+  }
+})();
+function vk(pc) { return pc.o * 16 + KI[pc.k] * 2 + (pc.p ? 1 : 0); }
+
+/* 成れる段: 先手は0〜2段、後手は6〜8段 */
+function inZone(o, r) { return o === 0 ? r <= 2 : r >= 6; }
+function lastRank(o, r) { return o === 0 ? r === 0 : r === 8; }
+function lastTwo(o, r) { return o === 0 ? r <= 1 : r >= 7; }
+
+/* 見た目の袋: 王1・玉1・飛2・角2・金4・銀4・桂4・香4・歩18 = 40枚(本物と同じ枚数) */
+const FACE_BAG = ['OU','GY','R','R','B','B','G','G','G','G','S','S','S','S','N','N','N','N','L','L','L','L']
+  .concat(Array(18).fill('P'));
+
+/* 初期局面。faces は FACE_BAG をシャッフルした40個の配列(駒id順に割り当て) */
+function initState(faces) {
+  const b = Array(81).fill(null);
+  let id = 0;
+  const back = ['L','N','S','G','K','G','S','N','L'];
+  const put = (r, c, k, o) => { b[r * 9 + c] = { id, k, p: false, o, f: faces[id] }; id++; };
+  for (let c = 0; c < 9; c++) put(0, c, back[c], 1);
+  put(1, 1, 'R', 1); put(1, 7, 'B', 1);
+  for (let c = 0; c < 9; c++) put(2, c, 'P', 1);
+  for (let c = 0; c < 9; c++) put(6, c, 'P', 0);
+  put(7, 1, 'B', 0); put(7, 7, 'R', 0);
+  for (let c = 0; c < 9; c++) put(8, c, back[c], 0);
+  return { b, h: [[], []], t: 0, kp: [8 * 9 + 4, 4], n: 0 };
+}
+
+function attacked(s, t, by) {
+  const b = s.b, tr = (t / 9) | 0, tc = t % 9;
+  for (let di = 0; di < 8; di++) {
+    const dr = DIRS8[di][0], dc = DIRS8[di][1];
+    let r = tr + dr, c = tc + dc, k = 1;
+    const need = 1 << OPPD[di];
+    while (r >= 0 && r < 9 && c >= 0 && c < 9) {
+      const p = b[r * 9 + c];
+      if (p) {
+        if (p.o === by) { const v = VEC[vk(p)]; if (((v.sm & need) && k === 1) || (v.lm & need)) return true; }
+        break;
+      }
+      r += dr; c += dc; k++;
+    }
+  }
+  const f = by === 0 ? -1 : 1, rr = tr - 2 * f;
+  if (rr >= 0 && rr < 9) {
+    for (let dc = -1; dc <= 1; dc += 2) {
+      const cc = tc + dc;
+      if (cc >= 0 && cc < 9) { const p = s.b[rr * 9 + cc]; if (p && p.o === by && p.k === 'N' && !p.p) return true; }
+    }
+  }
+  return false;
+}
+function inCheck(s) { return attacked(s, s.kp[s.t], 1 - s.t); }
+
+function apply(s, m) {
+  const b = s.b.slice(), h = [s.h[0], s.h[1]], kp = s.kp.slice(), o = s.t;
+  if (m.from < 0) {
+    b[m.to] = m.pc;
+    h[o] = h[o].filter(x => x.id !== m.pc.id);
+  } else {
+    let pc = b[m.from];
+    const cap = b[m.to];
+    if (cap) h[o] = h[o].concat([{ id: cap.id, k: cap.k, p: false, o: o, f: cap.f }]);
+    b[m.from] = null;
+    if (m.promote) pc = { id: pc.id, k: pc.k, p: true, o: pc.o, f: pc.f };
+    b[m.to] = pc;
+    if (pc.k === 'K') kp[o] = m.to;
+  }
+  return { b, h, t: 1 - o, kp, n: s.n + 1 };
+}
+
+function nifu(b, c, o) {
+  for (let r = 0; r < 9; r++) { const p = b[r * 9 + c]; if (p && p.o === o && p.k === 'P' && !p.p) return true; }
+  return false;
+}
+
+/* 合法手の生成。anyOnly=true なら「指せる手が1つでもあるか」を返す */
+function gen(s, anyOnly, capOnly) {
+  const o = s.t, b = s.b, out = [];
+  for (let i = 0; i < 81; i++) {
+    const pc = b[i];
+    if (!pc || pc.o !== o) continue;
+    const r = (i / 9) | 0, c = i % 9, V = VEC[vk(pc)];
+    const addTo = (tr, tc) => {
+      const t = tr * 9 + tc, tg = b[t];
+      if (tg && tg.o === o) return 0;               // 自駒
+      if (capOnly && !tg) return 0;
+      let must = false, can = false;
+      if (!pc.p && PROK[pc.k]) {
+        can = inZone(o, r) || inZone(o, tr);
+        if (pc.k === 'P' || pc.k === 'L') must = lastRank(o, tr);
+        else if (pc.k === 'N') must = lastTwo(o, tr);
+      }
+      const cands = [];
+      if (!must) cands.push({ from: i, to: t, promote: false });
+      if (can) cands.push({ from: i, to: t, promote: true });
+      for (const m of cands) {
+        const ns = apply(s, m);
+        if (attacked(ns, ns.kp[o], 1 - o)) continue;
+        if (anyOnly) return 2;
+        out.push(m);
+      }
+      return tg ? 1 : 0;                              // 1 = 相手駒を取った(ここで止まる)
+    };
+    for (const [dr, dc] of V.step) {
+      const tr = r + dr, tc = c + dc;
+      if (tr < 0 || tr > 8 || tc < 0 || tc > 8) continue;
+      if (addTo(tr, tc) === 2) return true;
+    }
+    for (const [dr, dc] of V.slide) {
+      let tr = r + dr, tc = c + dc;
+      while (tr >= 0 && tr <= 8 && tc >= 0 && tc <= 8) {
+        const x = addTo(tr, tc);
+        if (x === 2) return true;
+        if (x === 1 || b[tr * 9 + tc]) break;
+        tr += dr; tc += dc;
+      }
+    }
+  }
+  if (capOnly) return out;
+  const seen = {};
+  for (const pc of s.h[o]) {
+    if (seen[pc.k]) continue;
+    seen[pc.k] = 1;
+    for (let t = 0; t < 81; t++) {
+      if (b[t]) continue;
+      const r = (t / 9) | 0, c = t % 9;
+      if (pc.k === 'P') { if (lastRank(o, r)) continue; if (nifu(b, c, o)) continue; }
+      else if (pc.k === 'L') { if (lastRank(o, r)) continue; }
+      else if (pc.k === 'N') { if (lastTwo(o, r)) continue; }
+      const m = { from: -1, to: t, pc };
+      const ns = apply(s, m);
+      if (attacked(ns, ns.kp[o], 1 - o)) continue;
+      if (pc.k === 'P' && attacked(ns, ns.kp[1 - o], o)) {   // 打ち歩詰め
+        if (!gen(ns, true)) continue;
+      }
+      if (anyOnly) return true;
+      out.push(m);
+    }
+  }
+  return anyOnly ? false : out;
+}
+function legalMoves(s) { return gen(s, false); }
+function hasLegal(s) { return gen(s, true); }
+
+/* 同一局面判定用の署名(本当の駒種で作る) */
+function sig(s) {
+  let x = '';
+  for (let i = 0; i < 81; i++) { const p = s.b[i]; x += p ? p.k + (p.p ? '+' : '') + p.o : '.'; }
+  const hs = h => h.map(p => p.k).sort().join('');
+  return x + '|' + hs(s.h[0]) + '|' + hs(s.h[1]) + '|' + s.t;
+}
+
+/* ===== CPU =====(CPUは本当の駒種を知っている) */
+const VAL = { K: 0, R: 1000, B: 800, G: 500, S: 450, N: 350, L: 300, P: 100 };
+const PVAL = { R: 1300, B: 1100, S: 520, N: 520, L: 520, P: 540, G: 500, K: 0 };
+function pval(pc) { return pc.p ? PVAL[pc.k] : VAL[pc.k]; }
+function evalFor(s, me) {
+  let v = 0;
+  const kr0 = (s.kp[0] / 9) | 0, kc0 = s.kp[0] % 9, kr1 = (s.kp[1] / 9) | 0, kc1 = s.kp[1] % 9;
+  for (let i = 0; i < 81; i++) {
+    const p = s.b[i];
+    if (!p) continue;
+    const r = (i / 9) | 0, c = i % 9;
+    let x = pval(p);
+    if (p.k === 'P' && !p.p) x += (p.o === 0 ? 8 - r : r) * 3;
+    if (p.k !== 'K') {
+      const kr = p.o === 0 ? kr0 : kr1, kc = p.o === 0 ? kc0 : kc1;
+      const gold = p.k === 'G' || p.k === 'S' || (p.p && p.k !== 'B' && p.k !== 'R');
+      if (gold && Math.max(Math.abs(r - kr), Math.abs(c - kc)) <= 2) x += 14;          // 玉の守り
+      const er = p.o === 0 ? kr1 : kr0, ec = p.o === 0 ? kc1 : kc0;
+      if (p.k !== 'P' && Math.max(Math.abs(r - er), Math.abs(c - ec)) <= 2) x += 10;     // 相手玉に迫る
+    }
+    v += p.o === me ? x : -x;
+  }
+  for (let o = 0; o < 2; o++) for (const p of s.h[o]) { const x = VAL[p.k] * 1.1; v += o === me ? x : -x; }
+  return v;
+}
+function orderMoves(s, mv) {
+  const sc = m => {
+    let x = 0;
+    if (m.from >= 0) { const t = s.b[m.to]; if (t) x += pval(t) * 10 - pval(s.b[m.from]); }
+    if (m.promote) x += 50;
+    return x;
+  };
+  return mv.map(m => [sc(m), m]).sort((a, b) => b[0] - a[0]).map(a => a[1]);
+}
+function negamax(s, d, alpha, beta, ply) {
+  const mv = legalMoves(s);
+  if (!mv.length) return -100000 + ply;
+  if (d === 0) return evalFor(s, s.t);
+  let best = -Infinity;
+  for (const m of orderMoves(s, mv)) {
+    const v = -negamax(apply(s, m), d - 1, -beta, -alpha, ply + 1);
+    if (v > best) best = v;
+    if (best > alpha) alpha = best;
+    if (alpha >= beta) break;
+  }
+  return best;
+}
+/* ---- 時間制限つきの強い探索(反復深化 + 静止探索 + 置換表 + 王手延長) ---- */
+const TIMEUP = { timeup: true };
+const ZR = mulberry32(0xC0FFEE);
+const ZB1 = [], ZB2 = [], ZH1 = [], ZH2 = [];
+for (let i = 0; i < 81 * 32; i++) { ZB1.push((ZR() * 4294967296) | 0); ZB2.push((ZR() * 4294967296) | 0); }
+for (let i = 0; i < 2 * 8 * 20; i++) { ZH1.push((ZR() * 4294967296) | 0); ZH2.push((ZR() * 4294967296) | 0); }
+const ZSIDE = (ZR() * 4294967296) | 0;
+function zhash(s) {
+  let h1 = s.t ? ZSIDE : 0, h2 = 0;
+  for (let i = 0; i < 81; i++) {
+    const p = s.b[i];
+    if (p) { const q = i * 32 + vk(p); h1 ^= ZB1[q]; h2 ^= ZB2[q]; }
+  }
+  for (let o = 0; o < 2; o++) {
+    const cnt = {};
+    for (const p of s.h[o]) { const n = (cnt[p.k] = (cnt[p.k] || 0) + 1); const q = (o * 8 + KI[p.k]) * 20 + n; h1 ^= ZH1[q]; h2 ^= ZH2[q]; }
+  }
+  return [h1, h2];
+}
+let TT = new Map();
+function ordered(s, mv, ttm) {
+  const sc = m => {
+    let x = 0;
+    if (ttm && m.from === ttm.from && m.to === ttm.to && !!m.promote === !!ttm.promote && (m.from >= 0 || (ttm.pc && m.pc.k === ttm.pc.k))) x += 1e6;
+    if (m.from >= 0) { const t = s.b[m.to]; if (t) x += pval(t) * 10 - pval(s.b[m.from]) + 1000; }
+    if (m.promote) x += 60;
+    return x;
+  };
+  return mv.map(m => [sc(m), m]).sort((a, b) => b[0] - a[0]).map(a => a[1]);
+}
+function quiesce(s, alpha, beta, ply, ctx, qd) {
+  if ((++ctx.nodes & 1023) === 0 && Date.now() > ctx.deadline) throw TIMEUP;
+  const chk = inCheck(s);
+  let best;
+  if (!chk) {
+    best = evalFor(s, s.t);
+    if (best >= beta) return best;
+    if (best > alpha) alpha = best;
+    if (qd >= 6) return best;
+  } else best = -100000 + ply;
+  const mv = chk ? gen(s, false, false) : gen(s, false, true);
+  if (chk && !mv.length) return -100000 + ply;
+  for (const m of ordered(s, mv, null)) {
+    const v = -quiesce(apply(s, m), -beta, -alpha, ply + 1, ctx, qd + 1);
+    if (v > best) best = v;
+    if (best > alpha) alpha = best;
+    if (alpha >= beta) break;
+  }
+  return best;
+}
+function search(s, d, alpha, beta, ply, ctx) {
+  if ((++ctx.nodes & 1023) === 0 && Date.now() > ctx.deadline) throw TIMEUP;
+  const alpha0 = alpha;
+  const chk = inCheck(s);
+  if (d <= 0) {
+    if (chk && ply < 24) d = 1;
+    else return quiesce(s, alpha, beta, ply, ctx, 0);
+  }
+  const hh = zhash(s), h1 = hh[0], h2 = hh[1];
+  const e = TT.get(h1);
+  let ttm = null;
+  if (e && e.h2 === h2) {
+    ttm = e.m;
+    if (e.d >= d) {
+      if (e.f === 0) return e.v;
+      if (e.f === 1 && e.v >= beta) return e.v;
+      if (e.f === 2 && e.v <= alpha) return e.v;
+    }
+  }
+  const mv = legalMoves(s);
+  if (!mv.length) return -100000 + ply;
+  let best = -Infinity, bm = null;
+  for (const m of ordered(s, mv, ttm)) {
+    const v = -search(apply(s, m), d - 1, -beta, -alpha, ply + 1, ctx);
+    if (v > best) { best = v; bm = m; }
+    if (best > alpha) alpha = best;
+    if (alpha >= beta) break;
+  }
+  if (TT.size > 400000) TT.clear();
+  TT.set(h1, { h2, d, v: best, f: best <= alpha0 ? 2 : best >= beta ? 1 : 0, m: bm });
+  return best;
+}
+function cpuSearch(s, ms) {
+  const ctx = { nodes: 0, deadline: Date.now() + ms };
+  TT = new Map();
+  let mv = ordered(s, legalMoves(s), null);
+  if (!mv.length) return null;
+  if (mv.length === 1) return mv[0];
+  let best = mv[0];
+  try {
+    for (let d = 1; d <= 14; d++) {
+      let bv = -Infinity, bm = null, alpha = -Infinity;
+      for (const m of mv) {
+        const v = -search(apply(s, m), d - 1, -Infinity, -alpha, 1, ctx);
+        if (v > bv) { bv = v; bm = m; }
+        if (v > alpha) alpha = v;
+      }
+      best = bm;
+      mv = [bm].concat(mv.filter(x => x !== bm));
+      if (bv > 90000 || Date.now() > ctx.deadline) break;
+    }
+  } catch (err) { if (err !== TIMEUP) throw err; }
+  return best;
+}
+const LEVEL_MS = { 3: 2000, 4: 5000, 5: 15000, 6: 30000 };
+
+/* level 0: ランダム / 1: 2手読み / 2: 3手読み / 3: 最大約2秒 / 4: 最大約5秒 / 5: 約15秒 / 6: 約30秒 */
 function cpuPick(s, level, rnd, msOverride) {
   const mv = legalMoves(s);
   if (!mv.length) return null;
@@ -520,16 +907,18 @@ if (typeof module !== 'undefined') module.exports = { cpuSearch, initState, lega
 (function () {
   const $ = s => document.querySelector(s);
   const KAN = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
-  const ST = { opp: 'cpu', side: 's', lvl: 1, miss: 'strike' };
+  const ST = { opp: 'cpu', side: 's', lvl: 1, miss: 'strike', max: 3 };
   try { Object.assign(ST, JSON.parse(localStorage.getItem('gawa_shogi_st') || '{}')); } catch (e) {}
   let G = null, sel = null, busy = false, reveal = false, pendingPro = null, toastT = null;
 
   function saveSt() { try { localStorage.setItem('gawa_shogi_st', JSON.stringify(ST)); } catch (e) {} }
   function readSettings() {
-    ST.opp = $('#sOpp').value; ST.side = $('#sSide').value; ST.lvl = parseInt($('#sLvl').value, 10); ST.miss = $('#sMiss').value; saveSt();
+    ST.opp = $('#sOpp').value; ST.side = $('#sSide').value; ST.lvl = parseInt($('#sLvl').value, 10); ST.miss = $('#sMiss').value;
+    const mx = parseInt($('#sMax').value, 10); ST.max = (mx >= 1 && mx <= 99) ? mx : 3; $('#sMax').value = String(ST.max); saveSt();
   }
   function writeSettings() {
-    $('#sOpp').value = ST.opp; $('#sSide').value = ST.side; $('#sLvl').value = String(ST.lvl); $('#sMiss').value = ST.miss;
+    $('#sOpp').value = ST.opp; $('#sSide').value = ST.side; $('#sLvl').value = String(ST.lvl); $('#sMiss').value = ST.miss; $('#sMax').value = String(ST.max >= 1 && ST.max <= 99 ? ST.max : 3);
+    $('#sMax').disabled = ST.miss !== 'strike';
     $('#sSide').disabled = ST.opp !== 'cpu'; $('#sLvl').disabled = ST.opp !== 'cpu';
   }
 
@@ -539,12 +928,13 @@ if (typeof module !== 'undefined') module.exports = { cpuSearch, initState, lega
   }
 
   function newGame(seedOverride) {
+    killWorker();
     readSettings();
     const raw = $('#sSeed').value.trim();
     let seed = seedOverride != null ? seedOverride : (raw === '' ? Math.floor(Math.random() * 1e9) : hashSeed(raw));
     const faces = shuffle(FACE_BAG.slice(), mulberry32(seed));
     const s = initState(faces);
-    const cfg = { opp: ST.opp, lvl: ST.lvl, miss: ST.miss,
+    const cfg = { opp: ST.opp, lvl: ST.lvl, miss: ST.miss, max: ST.max,
       humanO: ST.opp === 'two' ? 0 : (ST.side === 's' ? 0 : ST.side === 'g' ? 1 : (Math.random() < .5 ? 0 : 1)) };
     G = { s, cfg, seed, hist: [], sigs: [sig(s)], last: null, over: null, strikes: [0, 0], check: false, legal: null, token: Math.random() };
     G.legal = legalMoves(s);
@@ -599,9 +989,9 @@ if (typeof module !== 'undefined') module.exports = { cpuSearch, initState, lega
       small = G.over.reason;
     } else {
       main = `${nameOf(s.t)}の番(${s.t === 0 ? '先手' : '後手'}・${s.n + 1}手目)`;
-      if (busy) main = 'CPU考え中…';
+      if (busy) main = 'CPU考え中…' + (G.cfg.lvl >= 3 ? `(${Math.floor((Date.now() - busyT0) / 1000)}秒)` : '');
       if (G.check) { main += '　王手!'; chk = true; }
-      if (G.cfg.miss === 'strike') small = `反則 ${isCpu() ? 'あなた' : '先手'} ${G.strikes[isCpu() ? G.cfg.humanO : 0]}/3` + (isCpu() ? '' : `・後手 ${G.strikes[1]}/3`);
+      if (G.cfg.miss === 'strike') small = `反則 ${isCpu() ? 'あなた' : '先手'} ${G.strikes[isCpu() ? G.cfg.humanO : 0]}/${G.cfg.max}` + (isCpu() ? '' : `・後手 ${G.strikes[1]}/${G.cfg.max}`);
       small += (small ? '　' : '') + `配置コード ${G.seed}`;
     }
     $('#status').innerHTML = `<div class="main${chk ? ' chk' : ''}">${main}</div><div class="small">${small}</div>`;
@@ -661,8 +1051,8 @@ if (typeof module !== 'undefined') module.exports = { cpuSearch, initState, lega
     const mode = G.cfg.miss;
     if (mode === 'strike') {
       G.strikes[o]++;
-      if (G.strikes[o] >= 3) { endGame(1 - o, `${nameOf(o)}が反則3回`); return; }
-      toast(`反則! (${G.strikes[o]}/3)`);
+      if (G.strikes[o] >= G.cfg.max) { endGame(1 - o, `${nameOf(o)}が反則${G.cfg.max}回`); return; }
+      toast(`反則! (${G.strikes[o]}/${G.cfg.max})`);
       render();
     } else if (mode === 'hint') {
       toast('そこには動けません');
@@ -710,17 +1100,49 @@ if (typeof module !== 'undefined') module.exports = { cpuSearch, initState, lega
     render();
     maybeCpu();
   }
+  let wk = null, wkId = 0, busyT0 = 0, busyTick = null;
+  const LVL_LIMIT = { 3: 2000, 4: 5000, 5: 15000, 6: 30000 };
+  function mkWorker() {
+    if (wk) return wk;
+    try { wk = new Worker(URL.createObjectURL(new Blob([$('#workerSrc').textContent], { type: 'text/javascript' }))); } catch (e) { wk = null; }
+    return wk;
+  }
+  function killWorker() { wkId++; if (wk) { try { wk.terminate(); } catch (e) {} wk = null; } stopTick(); }
+  function stopTick() { if (busyTick) { clearInterval(busyTick); busyTick = null; } }
   function maybeCpu() {
     if (!G || G.over || !isCpu() || G.s.t === G.cfg.humanO) return;
-    busy = true; render();
-    const tok = G.token, snap = G.s;
-    setTimeout(() => {
+    busy = true; busyT0 = Date.now(); render();
+    const tok = G.token, snap = G.s, lvl = G.cfg.lvl, myId = ++wkId;
+    const finish = (m) => {
+      stopTick();
       if (!G || G.token !== tok || G.s !== snap || G.over) { busy = false; return; }
-      const m = cpuPick(G.s, G.cfg.lvl, Math.random);
       busy = false;
       if (!m) { endGame(1 - G.s.t, '詰み'); return; }
       doMove(m);
-    }, 380);
+    };
+    const w = lvl >= 3 ? mkWorker() : null;   // 強い設定は裏(Worker)で考える。画面は固まらない
+    if (!w) {
+      setTimeout(() => {
+        if (!G || G.token !== tok || G.s !== snap || G.over) { busy = false; return; }
+        finish(cpuPick(snap, lvl, Math.random));
+      }, 380);
+      return;
+    }
+    stopTick(); busyTick = setInterval(() => { if (busy) render(); }, 1000);
+    let done = false;
+    const wd = setTimeout(() => {          // 万一返ってこない時の保険(時間+8秒)
+      if (done || myId !== wkId) return;
+      done = true; killWorker(); finish(cpuPick(snap, 1, Math.random));
+    }, (LVL_LIMIT[lvl] || 5000) + 8000);
+    w.onmessage = (e) => {
+      if (done || e.data.id !== myId) return;
+      done = true; clearTimeout(wd); finish(e.data.m);
+    };
+    w.onerror = () => {
+      if (done || myId !== wkId) return;
+      done = true; clearTimeout(wd); killWorker(); finish(cpuPick(snap, 1, Math.random));
+    };
+    w.postMessage({ id: myId, s: snap, lvl });
   }
 
   function endGame(winner, reason) {
@@ -758,7 +1180,7 @@ if (typeof module !== 'undefined') module.exports = { cpuSearch, initState, lega
 
   writeSettings();
   newGame();
-  window.__gawa = { get G() { return G; }, onCell, newGame };   // 動作確認用
+  window.__gawa = { get G() { return G; }, get busy() { return busy; }, onCell, newGame, doMove };   // 動作確認用
 })();
 </script>
 </body>
