@@ -86,6 +86,7 @@ button:disabled{opacity:.4;cursor:default}
       <li>コインは駒を飛び越えられません。コインが盤の外に出る手、コインの行き先や通り道に駒がある手は、指せません(桂馬のようなジャンプは、行き先だけ見ます)。</li>
       <li>王手と詰みのルールはふつうの将棋と同じです。詰ませたら勝ちです。</li>
       <li>指せる手がないときは、自動でパスになります。</li>
+      <li>同じ局面が2回目になると、コインが中央(5五)に戻ります(コインで詰まって、ゲームが進まなくなるのを防ぐため)。</li>
     </ul>
   </details>
 
@@ -1261,6 +1262,15 @@ if (typeof module !== 'undefined') module.exports = { initState, legalMoves, gen
     if (m.from < 0) t += '打'; else if (m.promote) t += '成';
     return t;
   }
+  function coinHome(s) {   // 5五に近い、駒のない空きマス(5五が空いていれば5五)
+    let best = -1, bd = 1e9;
+    for (let i = 0; i < 81; i++) {
+      if (s.b[i]) continue;
+      const d = ((i / 9 | 0) - 4) ** 2 + ((i % 9) - 4) ** 2;
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+  }
   function doMove(m) {
     const prev = G.s, prevText = G.lastText;
     G.lastText = '直前の手: ' + moveText(prev, m);
@@ -1274,7 +1284,17 @@ if (typeof module !== 'undefined') module.exports = { initState, legalMoves, gen
       endGame(prev.t, `${nameOf(cap.o)}の影武者「${glyph(cap)}」を取りました`);
       return;
     }
-    G.sigs.push(sig(G.s));
+    let sg = sig(G.s);
+    if (MODE === 'coin' && G.sigs.includes(sg)) {   // 同じ局面が2回目: コインを中央(5五)に戻して、詰まりを防ぐ
+      const home = coinHome(G.s);
+      if (home >= 0 && home !== G.s.coin) {
+        G.s = Object.assign({}, G.s, { coin: home });
+        sg = sig(G.s);
+        toast('同じ局面が2回目なので、コインを中央に戻しました');
+        G.lastText += '(コインを中央へ)';
+      }
+    }
+    G.sigs.push(sg);
     G.legal = legalMoves(G.s); G.check = inCheck(G.s);
     if (!G.legal.length) { render(); endGame(prev.t, '詰み'); return; }
     if (!onlyPass(G.legal)) {
