@@ -83,7 +83,7 @@ button:disabled{opacity:.4;cursor:default}
       <li>ふつうの将棋のルールに、金色の「コイン」が加わります。最初は5五にあります。</li>
       <li>駒を動かすと、コインも同じ向き・同じ距離だけ動きます(▲7六歩なら、コインは5五から5四へ)。</li>
       <li>駒がコインのあるマスに動くのはOKです(そのとき、コインは駒と同じだけ動いて、そこから離れます)。持ち駒は、コインのあるマスには打てません。</li>
-      <li>コインが盤の外に出る手、コインの行き先に駒がある手は、指せません。</li>
+      <li>コインは駒を飛び越えられません。コインが盤の外に出る手、コインの行き先や通り道に駒がある手は、指せません(桂馬のようなジャンプは、行き先だけ見ます)。</li>
       <li>王手と詰みのルールはふつうの将棋と同じです。詰ませたら勝ちです。</li>
       <li>指せる手がないときは、自動でパスになります。</li>
     </ul>
@@ -143,7 +143,7 @@ button:disabled{opacity:.4;cursor:default}
      kage: 王手の概念なし(王手放置・打ち歩詰めも反則にしない)。影武者を取られたら負け。
            二歩・行き所のない駒は反則。指せる手がなければパス、両者続けてパスなら引き分け。
      coin: 通常の将棋(王手・詰み・打ち歩詰めあり)。駒を動かすと、コインも同じ向き・同じ距離だけ動く。
-           コインの行き先が盤の外、または(動かした後の盤で)駒のあるマスなら、その手は指せない。
+           コインの行き先が盤の外、または(動かした後の盤で)駒のあるマス、または直線の通り道に駒があるなら、その手は指せない。
            駒がコインのマスへ動くのは可(コインは動いて離れる)。コインのマスへ打つのは不可。コインの上を通り抜けるのも可。打つ手ではコインは動かない。
            指せる手がなく王手もされていなければパス。両者続けてパスなら引き分け。
 */
@@ -260,10 +260,20 @@ function nifu(b, c, o) {
 /* コインの動きで指せない理由(指せるなら null)。from→to を動かしたとき */
 function coinBlock(s, from, to) {
   if (!isCoin(s)) return null;
-  const nr = ((s.coin / 9) | 0) + (((to / 9) | 0) - ((from / 9) | 0)), nc = (s.coin % 9) + ((to % 9) - (from % 9));
+  const dr = ((to / 9) | 0) - ((from / 9) | 0), dc = (to % 9) - (from % 9);
+  const cr = (s.coin / 9) | 0, cc = s.coin % 9, nr = cr + dr, nc = cc + dc;
   if (nr < 0 || nr > 8 || nc < 0 || nc > 8) return 'off';
   const ct = nr * 9 + nc;
   if (ct !== from && s.b[ct]) return 'hit';
+  // 直線に動く手(1マス含む)では、コインも同じ道を進む。途中に駒があれば通れない(桂馬のようなジャンプは行き先だけ見る)
+  const line = dr === 0 || dc === 0 || Math.abs(dr) === Math.abs(dc);
+  if (line) {
+    const n = Math.max(Math.abs(dr), Math.abs(dc)), sr = Math.sign(dr), sc = Math.sign(dc);
+    for (let k = 1; k < n; k++) {
+      const sq = (cr + k * sr) * 9 + (cc + k * sc);
+      if (sq === to || (sq !== from && s.b[sq])) return 'path';
+    }
+  }
   return null;
 }
 
@@ -595,7 +605,7 @@ self.onmessage = function (e) { var d = e.data; self.postMessage({ id: d.id, m: 
      kage: 王手の概念なし(王手放置・打ち歩詰めも反則にしない)。影武者を取られたら負け。
            二歩・行き所のない駒は反則。指せる手がなければパス、両者続けてパスなら引き分け。
      coin: 通常の将棋(王手・詰み・打ち歩詰めあり)。駒を動かすと、コインも同じ向き・同じ距離だけ動く。
-           コインの行き先が盤の外、または(動かした後の盤で)駒のあるマスなら、その手は指せない。
+           コインの行き先が盤の外、または(動かした後の盤で)駒のあるマス、または直線の通り道に駒があるなら、その手は指せない。
            駒がコインのマスへ動くのは可(コインは動いて離れる)。コインのマスへ打つのは不可。コインの上を通り抜けるのも可。打つ手ではコインは動かない。
            指せる手がなく王手もされていなければパス。両者続けてパスなら引き分け。
 */
@@ -712,10 +722,20 @@ function nifu(b, c, o) {
 /* コインの動きで指せない理由(指せるなら null)。from→to を動かしたとき */
 function coinBlock(s, from, to) {
   if (!isCoin(s)) return null;
-  const nr = ((s.coin / 9) | 0) + (((to / 9) | 0) - ((from / 9) | 0)), nc = (s.coin % 9) + ((to % 9) - (from % 9));
+  const dr = ((to / 9) | 0) - ((from / 9) | 0), dc = (to % 9) - (from % 9);
+  const cr = (s.coin / 9) | 0, cc = s.coin % 9, nr = cr + dr, nc = cc + dc;
   if (nr < 0 || nr > 8 || nc < 0 || nc > 8) return 'off';
   const ct = nr * 9 + nc;
   if (ct !== from && s.b[ct]) return 'hit';
+  // 直線に動く手(1マス含む)では、コインも同じ道を進む。途中に駒があれば通れない(桂馬のようなジャンプは行き先だけ見る)
+  const line = dr === 0 || dc === 0 || Math.abs(dr) === Math.abs(dc);
+  if (line) {
+    const n = Math.max(Math.abs(dr), Math.abs(dc)), sr = Math.sign(dr), sc = Math.sign(dc);
+    for (let k = 1; k < n; k++) {
+      const sq = (cr + k * sr) * 9 + (cc + k * sc);
+      if (sq === to || (sq !== from && s.b[sq])) return 'path';
+    }
+  }
   return null;
 }
 
@@ -1201,10 +1221,10 @@ if (typeof module !== 'undefined') module.exports = { initState, legalMoves, gen
     if (from < 0) return to === s.coin ? 'コインのあるマスには打てません' : 'そこには打てません';
     const pseudo = gen(Object.assign({}, s, { mode: 'kage', kg: null, coin: -1 }), false).some(m => m.from === from && m.to === to);
     if (!pseudo) return 'そこには動けません';
-    const nr = ((s.coin / 9) | 0) + (((to / 9) | 0) - ((from / 9) | 0)), nc = (s.coin % 9) + ((to % 9) - (from % 9));
-    if (nr < 0 || nr > 8 || nc < 0 || nc > 8) return 'コインが盤の外に出てしまうので指せません';
-    const ct = nr * 9 + nc;
-    if (ct !== from && s.b[ct]) return 'コインの行き先に駒があるので指せません';
+    const why = coinBlock(s, from, to);
+    if (why === 'off') return 'コインが盤の外に出てしまうので指せません';
+    if (why === 'hit') return 'コインの行き先に駒があるので指せません';
+    if (why === 'path') return 'コインの通り道に駒があるので指せません(コインは駒を飛び越えられません)';
     return G.check ? '王手を外す手を指してください' : '自玉が取られる手は指せません(王手放置)';
   }
   function onCell(i) {
