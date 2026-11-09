@@ -144,7 +144,7 @@ button:disabled{opacity:.4;cursor:default}
            二歩・行き所のない駒は反則。指せる手がなければパス、両者続けてパスなら引き分け。
      coin: 通常の将棋(王手・詰み・打ち歩詰めあり)。駒を動かすと、コインも同じ向き・同じ距離だけ動く。
            コインの行き先が盤の外、または(動かした後の盤で)駒のあるマスなら、その手は指せない。
-           コインのマスには駒を動かせない・打てない(コインの上を通り抜けるのは可)。打つ手ではコインは動かない。
+           駒がコインのマスへ動くのは可(コインは動いて離れる)。コインのマスへ打つのは不可。コインの上を通り抜けるのも可。打つ手ではコインは動かない。
            指せる手がなく王手もされていなければパス。両者続けてパスなら引き分け。
 */
 const DIRS8 = [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]];
@@ -260,7 +260,6 @@ function nifu(b, c, o) {
 /* コインの動きで指せない理由(指せるなら null)。from→to を動かしたとき */
 function coinBlock(s, from, to) {
   if (!isCoin(s)) return null;
-  if (to === s.coin) return 'onCoin';
   const nr = ((s.coin / 9) | 0) + (((to / 9) | 0) - ((from / 9) | 0)), nc = (s.coin % 9) + ((to % 9) - (from % 9));
   if (nr < 0 || nr > 8 || nc < 0 || nc > 8) return 'off';
   const ct = nr * 9 + nc;
@@ -366,6 +365,20 @@ function evalFor(s, me) {
     const r = (i / 9) | 0, c = i % 9;
     let x = pval(p);
     if (p.k === 'P' && !p.p) x += (p.o === 0 ? 8 - r : r) * 3;
+    if (!coinMode) {
+      const adv = p.o === 0 ? 8 - r : r, cd = Math.abs(c - 4);
+      const kr = p.o === 0 ? kr0 : kr1, kc = p.o === 0 ? kc0 : kc1;
+      const near = Math.max(Math.abs(r - kr), Math.abs(c - kc)) <= 2;
+      if (p.p) { /* 成り駒は価値表のまま */ }
+      else if (p.k === 'P') { x += adv * 2 + (cd <= 1 ? 3 : 0); if (adv >= 6) x += 10; }
+      else if (p.k === 'L') x += adv;
+      else if (p.k === 'N') { if (adv >= 2 && adv <= 5) x += 8; }
+      else if (p.k === 'S') { if (adv >= 1) x += 10; if (adv >= 3) x += 6; if (near) x += 8; }
+      else if (p.k === 'G') { if (near) x += 12; if (adv >= 5) x -= 8; }
+      else if (p.k === 'B') { if (adv >= 1) x += 12; if (adv >= 2 && adv <= 5) x += 6; }
+      else if (p.k === 'R') { if (adv >= 1) x += 8; let own = false; for (let rr = 0; rr < 9; rr++) { const q = s.b[rr * 9 + c]; if (q && q.o === p.o && q.k === 'P' && !q.p) own = true; } if (!own) x += 14; }
+      else if (p.k === 'K') { x -= adv * 7; if (c === 1 || c === 2 || c === 6 || c === 7) x += 6; }
+    }
     if (coinMode && p.k !== 'K') {
       const kr = p.o === 0 ? kr0 : kr1, kc = p.o === 0 ? kc0 : kc1;
       const gold = p.k === 'G' || p.k === 'S' || (p.p && p.k !== 'B' && p.k !== 'R');
@@ -535,16 +548,20 @@ function cpuPick(s, level, rnd, msOverride) {
   if (mv.length === 1) return mv[0];
   // 相手の影武者が取れるとは限らないので、CPUは「取れば勝ち」とは考えない(自分の影武者だけ知っている)
   if (level === 0) return mv[Math.floor(rnd() * mv.length)];
-  if (level >= 3 && s.n >= 6) return cpuSearch(s, msOverride || LEVEL_MS[level]);
-  const depth = level === 1 ? 2 : 3;
+  const depth = level === 1 ? 2 : level === 2 ? 3 : 0;
+  if (level >= 3) return cpuSearch(s, msOverride || LEVEL_MS[level]);
+  TT = new Map();
+  const ctx = { nodes: 0, deadline: Date.now() + (level === 1 ? 700 : 1500) };
   let bestV = -Infinity, bests = [];
-  for (const m of orderMoves(s, mv)) {
-    const ns = apply(s, m);
-    const v = (kageCaptured(s, ns) ? WIN_V : -negamax(ns, depth - 1, -Infinity, Infinity, 1)) + rnd() * 6;
-    if (v > bestV + 8) { bestV = v; bests = [m]; }
-    else if (v > bestV - 8) { if (v > bestV) bestV = v; bests.push(m); }
-  }
-  return bests[Math.floor(rnd() * bests.length)];
+  const noise = level === 1 ? 14 : 5;
+  try {
+    for (const m of ordered(s, mv, null)) {
+      const ns = apply(s, m);
+      const v = (kageCaptured(s, ns) ? WIN_V : -search(ns, depth - 1, -Infinity, Infinity, 1, ctx)) + rnd() * noise;
+      if (v > bestV) { bestV = v; bests = [m]; }
+    }
+  } catch (err) { if (err !== TIMEUP) throw err; if (!bests.length) bests = [mv[0]]; }
+  return bests[0];
 }
 
 /* CPUに渡す前に、人間側の影武者の情報を消す(CPUは知らない) */
@@ -579,7 +596,7 @@ self.onmessage = function (e) { var d = e.data; self.postMessage({ id: d.id, m: 
            二歩・行き所のない駒は反則。指せる手がなければパス、両者続けてパスなら引き分け。
      coin: 通常の将棋(王手・詰み・打ち歩詰めあり)。駒を動かすと、コインも同じ向き・同じ距離だけ動く。
            コインの行き先が盤の外、または(動かした後の盤で)駒のあるマスなら、その手は指せない。
-           コインのマスには駒を動かせない・打てない(コインの上を通り抜けるのは可)。打つ手ではコインは動かない。
+           駒がコインのマスへ動くのは可(コインは動いて離れる)。コインのマスへ打つのは不可。コインの上を通り抜けるのも可。打つ手ではコインは動かない。
            指せる手がなく王手もされていなければパス。両者続けてパスなら引き分け。
 */
 const DIRS8 = [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]];
@@ -695,7 +712,6 @@ function nifu(b, c, o) {
 /* コインの動きで指せない理由(指せるなら null)。from→to を動かしたとき */
 function coinBlock(s, from, to) {
   if (!isCoin(s)) return null;
-  if (to === s.coin) return 'onCoin';
   const nr = ((s.coin / 9) | 0) + (((to / 9) | 0) - ((from / 9) | 0)), nc = (s.coin % 9) + ((to % 9) - (from % 9));
   if (nr < 0 || nr > 8 || nc < 0 || nc > 8) return 'off';
   const ct = nr * 9 + nc;
@@ -801,6 +817,20 @@ function evalFor(s, me) {
     const r = (i / 9) | 0, c = i % 9;
     let x = pval(p);
     if (p.k === 'P' && !p.p) x += (p.o === 0 ? 8 - r : r) * 3;
+    if (!coinMode) {
+      const adv = p.o === 0 ? 8 - r : r, cd = Math.abs(c - 4);
+      const kr = p.o === 0 ? kr0 : kr1, kc = p.o === 0 ? kc0 : kc1;
+      const near = Math.max(Math.abs(r - kr), Math.abs(c - kc)) <= 2;
+      if (p.p) { /* 成り駒は価値表のまま */ }
+      else if (p.k === 'P') { x += adv * 2 + (cd <= 1 ? 3 : 0); if (adv >= 6) x += 10; }
+      else if (p.k === 'L') x += adv;
+      else if (p.k === 'N') { if (adv >= 2 && adv <= 5) x += 8; }
+      else if (p.k === 'S') { if (adv >= 1) x += 10; if (adv >= 3) x += 6; if (near) x += 8; }
+      else if (p.k === 'G') { if (near) x += 12; if (adv >= 5) x -= 8; }
+      else if (p.k === 'B') { if (adv >= 1) x += 12; if (adv >= 2 && adv <= 5) x += 6; }
+      else if (p.k === 'R') { if (adv >= 1) x += 8; let own = false; for (let rr = 0; rr < 9; rr++) { const q = s.b[rr * 9 + c]; if (q && q.o === p.o && q.k === 'P' && !q.p) own = true; } if (!own) x += 14; }
+      else if (p.k === 'K') { x -= adv * 7; if (c === 1 || c === 2 || c === 6 || c === 7) x += 6; }
+    }
     if (coinMode && p.k !== 'K') {
       const kr = p.o === 0 ? kr0 : kr1, kc = p.o === 0 ? kc0 : kc1;
       const gold = p.k === 'G' || p.k === 'S' || (p.p && p.k !== 'B' && p.k !== 'R');
@@ -970,16 +1000,20 @@ function cpuPick(s, level, rnd, msOverride) {
   if (mv.length === 1) return mv[0];
   // 相手の影武者が取れるとは限らないので、CPUは「取れば勝ち」とは考えない(自分の影武者だけ知っている)
   if (level === 0) return mv[Math.floor(rnd() * mv.length)];
-  if (level >= 3 && s.n >= 6) return cpuSearch(s, msOverride || LEVEL_MS[level]);
-  const depth = level === 1 ? 2 : 3;
+  const depth = level === 1 ? 2 : level === 2 ? 3 : 0;
+  if (level >= 3) return cpuSearch(s, msOverride || LEVEL_MS[level]);
+  TT = new Map();
+  const ctx = { nodes: 0, deadline: Date.now() + (level === 1 ? 700 : 1500) };
   let bestV = -Infinity, bests = [];
-  for (const m of orderMoves(s, mv)) {
-    const ns = apply(s, m);
-    const v = (kageCaptured(s, ns) ? WIN_V : -negamax(ns, depth - 1, -Infinity, Infinity, 1)) + rnd() * 6;
-    if (v > bestV + 8) { bestV = v; bests = [m]; }
-    else if (v > bestV - 8) { if (v > bestV) bestV = v; bests.push(m); }
-  }
-  return bests[Math.floor(rnd() * bests.length)];
+  const noise = level === 1 ? 14 : 5;
+  try {
+    for (const m of ordered(s, mv, null)) {
+      const ns = apply(s, m);
+      const v = (kageCaptured(s, ns) ? WIN_V : -search(ns, depth - 1, -Infinity, Infinity, 1, ctx)) + rnd() * noise;
+      if (v > bestV) { bestV = v; bests = [m]; }
+    }
+  } catch (err) { if (err !== TIMEUP) throw err; if (!bests.length) bests = [mv[0]]; }
+  return bests[0];
 }
 
 /* CPUに渡す前に、人間側の影武者の情報を消す(CPUは知らない) */
