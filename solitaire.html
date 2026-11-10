@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ソリティア — タコつぼゲームズ</title>
+<meta name="description" content="ふつうのソリティア(クロンダイク・1枚引き)。タップでもドラッグでも動かせる、無料のブラウザゲームです。">
+<style>
+:root{
+  --cw:calc((min(100vw,560px) - 32px - 16px - 34px)/7);
+  --bg:#faf6ee; --ink:#2b2118; --mute:#6b5b48; --card:#fff; --bd:#dccfb8; --accent:#b4442c;
+  --felt:#2f6b4a; --felt2:#285a3f;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#1f1b16; --ink:#f1e8da; --mute:#b6a78f; --card:#2a2520; --bd:#4a4034;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Hiragino Sans","Yu Gothic",sans-serif;line-height:1.5;-webkit-tap-highlight-color:transparent}
+.wrap{max-width:560px;margin:0 auto;padding:12px 16px 40px}
+.home{display:inline-block;font-size:13px;color:var(--mute);margin:0 0 2px}
+h1{font-size:22px;margin:6px 0 0;letter-spacing:.02em}
+.sub{margin:2px 0 10px;color:var(--mute);font-size:13px}
+details.how{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:8px 12px;margin-bottom:10px;font-size:13px}
+details.how summary{cursor:pointer;font-weight:600}
+details.how ul{margin:6px 0 2px;padding-left:18px}
+.bar{display:flex;justify-content:space-between;font-size:13px;color:var(--mute);margin:6px 2px}
+.table{background:radial-gradient(circle at 50% 30%,var(--felt),var(--felt2));border-radius:14px;padding:10px 8px 18px;user-select:none;-webkit-user-select:none}
+.grid{display:grid;grid-template-columns:repeat(7,var(--cw));gap:5px;justify-content:center}
+.top{margin-bottom:12px}
+.pile{position:relative;width:var(--cw);height:calc(var(--cw)*1.4)}
+.slot{position:absolute;inset:0;border:2px dashed rgba(255,255,255,.35);border-radius:7px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.45);font-size:calc(var(--cw)*.5)}
+.col{position:relative;width:var(--cw);min-height:calc(var(--cw)*1.4)}
+.card{position:absolute;left:0;width:var(--cw);height:calc(var(--cw)*1.4);border-radius:7px;background:#fff;border:1px solid #888;box-shadow:0 1px 2px rgba(0,0,0,.35);color:#111;font-weight:700;overflow:hidden;touch-action:none}
+.card.red{color:#c0392b}
+.card.down{background:repeating-linear-gradient(45deg,#b4442c 0 5px,#9a3822 5px 10px);border:2px solid #fff;touch-action:auto}
+.card .r{position:absolute;left:5%;top:2%;font-size:calc(var(--cw)*.34);line-height:1.05}
+.card .s{position:absolute;left:5%;top:calc(var(--cw)*.36);font-size:calc(var(--cw)*.3);line-height:1}
+.card .big{position:absolute;right:8%;bottom:4%;font-size:calc(var(--cw)*.62);line-height:1}
+.card.sel{outline:3px solid #ffd43b;outline-offset:-1px;box-shadow:0 0 10px 2px rgba(255,212,59,.8);z-index:50}
+.card.ghosted{opacity:.25}
+.ghost{position:fixed;z-index:100;pointer-events:none;width:var(--cw)}
+.ghost .card{opacity:.95}
+.stockn{position:absolute;right:4px;bottom:3px;font-size:calc(var(--cw)*.28);color:#fff;background:rgba(0,0,0,.45);border-radius:8px;padding:0 5px}
+.recycle{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:calc(var(--cw)*.6);color:rgba(255,255,255,.8)}
+.btns{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:14px 0 4px}
+button{font:inherit;font-size:14px;padding:8px 14px;border-radius:9px;border:1px solid var(--bd);background:var(--card);color:var(--ink);cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+button:disabled{opacity:.4;cursor:default}
+#toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#222;color:#fff;padding:10px 18px;border-radius:24px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .15s;z-index:200;max-width:86vw;text-align:center}
+#toast.on{opacity:.95}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:150}
+.overlay.on{display:flex}
+.dlg{background:var(--card);border-radius:14px;padding:18px 20px;min-width:240px;max-width:86vw;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.35)}
+.dlg h2{margin:0 0 6px;font-size:20px}
+.dlg p{margin:0 0 12px;font-size:14px;color:var(--mute)}
+.foot{margin-top:18px;font-size:11px;color:var(--mute);text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="home" href="games.html">🏠 タコつぼゲームズ</a>
+  <h1>ソリティア</h1>
+  <p class="sub">ふつうのソリティア(クロンダイク・1枚引き)。</p>
+  <details class="how">
+    <summary>あそびかた</summary>
+    <ul>
+      <li>すべてのカードを、右上の4つの場所に、A→Kの順で、同じマークごとに積めば勝ちです。</li>
+      <li>場札(下の7列)は、赤と黒を交互に、大きい数から小さい数へ重ねます(例: 黒の7の上に、赤の6)。</li>
+      <li>空いた列には、Kだけを置けます。</li>
+      <li>左上の山札をタップすると、1枚ずつめくれます。山札がなくなったら、もう一度タップすると、めくった札が山札に戻ります。</li>
+      <li>動かしかた: 動かしたいカードをタップして、置きたい場所をタップします。ドラッグでも動かせます。</li>
+      <li>カードをすばやく2回タップすると、右上の場所に、自動で上がります。</li>
+      <li>配られ方によっては、最後まで行けないこともあります(ふつうのソリティアと同じです)。</li>
+    </ul>
+  </details>
+  <div class="bar"><span id="mv">手数 0</span><span id="info"></span></div>
+  <div class="table" id="game">
+    <div class="grid top">
+      <div class="pile" id="stock" data-stock="1"></div>
+      <div class="pile" id="waste"></div>
+      <div></div>
+      <div class="pile" data-dest="f0"></div>
+      <div class="pile" data-dest="f1"></div>
+      <div class="pile" data-dest="f2"></div>
+      <div class="pile" data-dest="f3"></div>
+    </div>
+    <div class="grid" id="tab"></div>
+  </div>
+  <div class="btns">
+    <button class="primary" id="bNew">新しいゲーム</button>
+    <button id="bUndo">待った</button>
+    <button id="bAuto">上げられるだけ上げる</button>
+  </div>
+  <div class="foot">ソリティア — タコつぼゲームズ</div>
+</div>
+<div class="overlay" id="win"><div class="dlg"><h2>クリア!</h2><p id="winSub"></p><div class="btns" style="margin:0"><button class="primary" id="bNew2">もう一度</button><button id="bClose">盤を見る</button></div></div></div>
+<div id="toast"></div>
+<script>
+(function () {
+  const $ = s => document.querySelector(s);
+  const SUIT = ['♠', '♥', '♦', '♣'], RANK = ['', 'A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+  const isRed = s => s === 1 || s === 2;
+  let S = null, hist = [], sel = null, moves = 0, over = false, lastTap = { id: -1, t: 0 };
+  let drag = null, dragged = false, auto = false, toastT = null;
+
+  function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 1800); }
+  function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+
+  function deal() {
+    const deck = [];
+    for (let s = 0; s < 4; s++) for (let r = 1; r <= 13; r++) deck.push({ id: s * 13 + r - 1, s, r, up: false });
+    shuffle(deck);
+    const tab = [];
+    for (let i = 0; i < 7; i++) { tab.push(deck.splice(0, i + 1)); tab[i][i].up = true; }
+    S = { tab, stock: deck, waste: [], found: [[], [], [], []] };
+    hist = []; sel = null; moves = 0; over = false; auto = false;
+    $('#win').classList.remove('on');
+    render();
+  }
+  const snap = () => JSON.stringify({ S, moves });
+  function pushHist() { hist.push(snap()); if (hist.length > 600) hist.shift(); }
+
+  /* ---------- ルール ---------- */
+  function peek(src, idx) {
+    if (src === 'w') return S.waste.length ? [S.waste[S.waste.length - 1]] : null;
+    if (src[0] === 'f') { const p = S.found[+src[1]]; return p.length ? [p[p.length - 1]] : null; }
+    if (src[0] === 't') { const c = S.tab[+src[1]]; if (idx == null || idx < 0 || idx >= c.length || !c[idx].up) return null; return c.slice(idx); }
+    return null;
+  }
+  function canMove(src, idx, dest) {
+    const cards = peek(src, idx); if (!cards) return false;
+    if (dest === src) return false;
+    const c = cards[0];
+    if (dest[0] === 'f') {
+      if (cards.length !== 1) return false;
+      return S.found[c.s].length === c.r - 1 && !(src[0] === 'f');
+    }
+    const col = S.tab[+dest[1]];
+    if (!col.length) return c.r === 13;
+    const t = col[col.length - 1];
+    return t.up && t.r === c.r + 1 && isRed(t.s) !== isRed(c.s);
+  }
+  function doMove(src, idx, dest, noHist) {
+    if (!canMove(src, idx, dest)) return false;
+    if (!noHist) pushHist();
+    let cards;
+    if (src === 'w') cards = S.waste.splice(-1);
+    else if (src[0] === 'f') cards = S.found[+src[1]].splice(-1);
+    else { const col = S.tab[+src[1]]; cards = col.splice(idx); if (col.length && !col[col.length - 1].up) col[col.length - 1].up = true; }
+    if (dest[0] === 'f') S.found[cards[0].s].push(cards[0]);
+    else S.tab[+dest[1]].push(...cards);
+    moves++; sel = null;
+    render(); checkWin();
+    return true;
+  }
+  function drawStock() {
+    if (auto) return;
+    pushHist();
+    if (S.stock.length) { const c = S.stock.pop(); c.up = true; S.waste.push(c); }
+    else if (S.waste.length) { S.stock = S.waste.reverse().map(c => (c.up = false, c)); S.waste = []; }
+    else { hist.pop(); return; }
+    moves++; sel = null; render();
+  }
+  function checkWin() {
+    if (S.found.every(p => p.length === 13)) {
+      over = true; $('#winSub').textContent = `${moves}手でクリアしました`; $('#win').classList.add('on');
+    }
+  }
+  function foundationMoveFor(src, idx) {
+    const cards = peek(src, idx); if (!cards || cards.length !== 1) return null;
+    const dest = 'f' + cards[0].s; return canMove(src, idx, dest) ? dest : null;
+  }
+
+  /* ---------- 描画 ---------- */
+  function cardHTML(c, src, idx, top, cls) {
+    const st = top != null ? ` style="top:${top}"` : '';
+    if (!c.up) return `<div class="card down"${st}></div>`;
+    const sl = (sel && sel.src === src && (src[0] === 't' ? idx >= sel.idx : true)) ? ' sel' : '';
+    return `<div class="card${isRed(c.s) ? ' red' : ''}${sl}${cls || ''}" data-src="${src}" data-idx="${idx}"${st}><span class="r">${RANK[c.r]}</span><span class="s">${SUIT[c.s]}</span><span class="big">${SUIT[c.s]}</span></div>`;
+  }
+  function render() {
+    let h = '';
+    if (S.stock.length) h = `<div class="card down" style="top:0"></div><span class="stockn">${S.stock.length}</span>`;
+    else h = `<div class="slot"></div>${S.waste.length ? '<div class="recycle">↻</div>' : ''}`;
+    $('#stock').innerHTML = h;
+    $('#waste').innerHTML = S.waste.length ? cardHTML(S.waste[S.waste.length - 1], 'w', S.waste.length - 1, '0') : '<div class="slot"></div>';
+    document.querySelectorAll('[data-dest^="f"]').forEach(el => {
+      const k = +el.dataset.dest[1], p = S.found[k];
+      el.innerHTML = p.length ? cardHTML(p[p.length - 1], 'f' + k, p.length - 1, '0') : `<div class="slot">${SUIT[k]}</div>`;
+    });
+    let t = '';
+    S.tab.forEach((col, j) => {
+      let nd = 0, nu = 0, inner = '';
+      col.forEach((c, i) => {
+        const top = `calc(var(--cw)*${(nd * 0.2 + nu * 0.42).toFixed(3)})`;
+        inner += cardHTML(c, 't' + j, i, top);
+        if (c.up) nu++; else nd++;
+      });
+      const hgt = `calc(var(--cw)*${(1.4 + Math.max(0, nd * 0.2 + (nu - 1) * 0.42)).toFixed(3)})`;
+      t += `<div class="col" data-dest="t${j}" style="height:${hgt}">${col.length ? inner : '<div class="slot" style="position:absolute;inset:0;height:calc(var(--cw)*1.4)"></div>'}</div>`;
+    });
+    $('#tab').innerHTML = t;
+    $('#mv').textContent = `手数 ${moves}`;
+    $('#info').textContent = `山札 ${S.stock.length}枚 / 上がり ${S.found.reduce((a, p) => a + p.length, 0)}/52`;
+    $('#bUndo').disabled = !hist.length || auto;
+  }
+
+  /* ---------- 操作(タップ) ---------- */
+  function refOf(el) { return { src: el.dataset.src, idx: +el.dataset.idx }; }
+  $('#game').addEventListener('click', e => {
+    if (dragged) { dragged = false; return; }
+    if (over || auto) return;
+    if (e.target.closest('[data-stock]')) { drawStock(); return; }
+    const cardEl = e.target.closest('.card[data-src]');
+    const destEl = e.target.closest('[data-dest]');
+    if (cardEl) {
+      const ref = refOf(cardEl), id = peek(ref.src, ref.idx)[0].id, now = Date.now();
+      if (sel && sel.src === ref.src && sel.idx === ref.idx) {
+        if (lastTap.id === id && now - lastTap.t < 420) {   // 2回タップ: 自動で上がる
+          const d = foundationMoveFor(ref.src, ref.idx);
+          if (d) { doMove(ref.src, ref.idx, d); lastTap = { id: -1, t: 0 }; return; }
+        }
+        sel = null; render(); lastTap = { id, t: now }; return;
+      }
+      if (sel) {
+        const d = ref.src === 'w' ? null : (ref.src[0] === 'f' ? ref.src : 't' + ref.src[1]);
+        if (d && canMove(sel.src, sel.idx, d)) { doMove(sel.src, sel.idx, d); return; }
+      }
+      if (peek(ref.src, ref.idx)) { sel = ref; lastTap = { id, t: now }; render(); }
+      return;
+    }
+    if (destEl && sel) {
+      if (canMove(sel.src, sel.idx, destEl.dataset.dest)) doMove(sel.src, sel.idx, destEl.dataset.dest);
+      else toast('そこには置けません');
+    }
+  });
+
+  /* ---------- 操作(ドラッグ) ---------- */
+  document.addEventListener('pointerdown', e => {
+    dragged = false;
+    if (over || auto) return;
+    const el = e.target.closest('.card[data-src]'); if (!el || !$('#game').contains(el)) return;
+    const ref = refOf(el); if (!peek(ref.src, ref.idx)) return;
+    drag = { ref, x0: e.clientX, y0: e.clientY, on: false, el };
+  });
+  document.addEventListener('pointermove', e => {
+    if (!drag) return;
+    if (!drag.on) {
+      if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 8) return;
+      drag.on = true;
+      const cards = peek(drag.ref.src, drag.ref.idx), r0 = drag.el.getBoundingClientRect();
+      drag.dx = e.clientX - r0.left; drag.dy = e.clientY - r0.top;
+      const g = document.createElement('div'); g.className = 'ghost'; g.style.height = r0.height + 'px';
+      let html = '';
+      cards.forEach((c, i) => { html += cardHTML(c, '', 0, `calc(var(--cw)*${(i * 0.42).toFixed(2)})`); });
+      g.innerHTML = html; document.body.appendChild(g); drag.ghost = g;
+      document.querySelectorAll('.card[data-src]').forEach(n => {
+        const rf = refOf(n); if (rf.src === drag.ref.src && (drag.ref.src[0] !== 't' || rf.idx >= drag.ref.idx)) n.classList.add('ghosted');
+      });
+      sel = null;
+    }
+    drag.ghost.style.left = (e.clientX - drag.dx) + 'px'; drag.ghost.style.top = (e.clientY - drag.dy) + 'px';
+    e.preventDefault();
+  }, { passive: false });
+  function endDrag(e) {
+    if (!drag) return;
+    const d = drag; drag = null;
+    if (!d.on) return;
+    dragged = true; setTimeout(() => { dragged = false; }, 60);
+    d.ghost.remove();
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    const destEl = under && under.closest('[data-dest]');
+    let ok = false;
+    if (destEl) {
+      let dest = destEl.dataset.dest;
+      if (dest[0] === 'f') { const c = peek(d.ref.src, d.ref.idx)[0]; dest = 'f' + c.s; }
+      ok = doMove(d.ref.src, d.ref.idx, dest);
+    }
+    if (!ok) { document.querySelectorAll('.ghosted').forEach(n => n.classList.remove('ghosted')); if (destEl) toast('そこには置けません'); }
+  }
+  document.addEventListener('pointerup', endDrag);
+  document.addEventListener('pointercancel', endDrag);
+
+  /* ---------- ボタン ---------- */
+  $('#bNew').addEventListener('click', deal);
+  $('#bNew2').addEventListener('click', deal);
+  $('#bClose').addEventListener('click', () => $('#win').classList.remove('on'));
+  $('#bUndo').addEventListener('click', () => {
+    if (!hist.length || auto) return;
+    const o = JSON.parse(hist.pop()); S = o.S; moves = o.moves; sel = null; over = false; render();
+  });
+  $('#bAuto').addEventListener('click', () => {
+    if (over || auto) return;
+    function step() {
+      const cands = [['w', S.waste.length - 1]];
+      S.tab.forEach((c, j) => cands.push(['t' + j, c.length - 1]));
+      for (const [src, idx] of cands) { const d = idx >= 0 ? foundationMoveFor(src, idx) : null; if (d) return [src, idx, d]; }
+      return null;
+    }
+    const first = step(); if (!first) { toast('上げられるカードがありません'); return; }
+    pushHist(); auto = true;
+    const iv = setInterval(() => {
+      const m = step();
+      if (!m || over) { clearInterval(iv); auto = false; render(); return; }
+      doMove(m[0], m[1], m[2], true);
+    }, 90);
+  });
+
+  window.__sol = { get S() { return S; }, set S(v) { S = v; }, render, canMove, doMove, deal, get moves() { return moves; }, get hist() { return hist.length; }, get over() { return over; } };
+  deal();
+})();
+</script>
+</body>
+</html>
