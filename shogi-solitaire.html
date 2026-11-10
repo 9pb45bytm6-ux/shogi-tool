@@ -4,11 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>将棋ソリティア — タコつぼゲームズ</title>
-<meta name="description" content="同じ将棋の駒を2枚ずつ消していく、ソリティアパズル。必ず最後まで消せる配置で始まります。無料のブラウザゲームです。">
+<meta name="description" content="同じ将棋の駒を2枚ずつ消していく、ソリティアパズル。116枚・224枚・320枚の3段階。必ず最後まで消せる配置で始まります。無料のブラウザゲームです。">
 <style>
 :root{
   --W:min(100vw - 32px,520px);
-  --u:calc(var(--W)/24);
   --bg:#faf6ee; --ink:#2b2118; --mute:#6b5b48; --card:#fff; --bd:#dccfb8; --accent:#b4442c;
 }
 @media (prefers-color-scheme:dark){
@@ -23,9 +22,16 @@ h1{font-size:22px;margin:6px 0 0;letter-spacing:.02em}
 details.how{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:8px 12px;margin-bottom:10px;font-size:13px}
 details.how summary{cursor:pointer;font-weight:600}
 details.how ul{margin:6px 0 2px;padding-left:18px}
-.bar{display:flex;justify-content:space-between;font-size:13px;color:var(--mute);margin:6px 2px}
-.table{background:#2f6b4a;border-radius:14px;padding:12px 0 12px;user-select:none;-webkit-user-select:none;overflow:hidden}
-#board{position:relative;margin:0 auto;width:var(--W);height:calc(var(--u)*16*1.22 + var(--u)*.6)}
+.lvs{display:flex;gap:6px;margin:0 0 8px}
+.lvs button{flex:1;padding:7px 4px;font-size:13px;line-height:1.3}
+.lvs button small{display:block;font-size:11px;color:var(--mute)}
+.lvs button.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.lvs button.on small{color:#ffe9e1}
+.bar{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--mute);margin:6px 2px}
+.zoom{display:flex;gap:4px;align-items:center}
+.zoom button{padding:2px 10px;font-size:15px;line-height:1.4}
+.table{background:#2f6b4a;border-radius:14px;padding:12px 0;user-select:none;-webkit-user-select:none;overflow:auto;max-height:72vh;-webkit-overflow-scrolling:touch}
+#board{--u:calc(var(--W)*var(--zm,1)/var(--wd,24));position:relative;margin:0 auto;width:calc(var(--u)*var(--wd,24));height:calc(var(--u)*1.22*var(--ht,16) + var(--u)*.9)}
 .tile{position:absolute;width:calc(var(--u)*2);height:calc(var(--u)*2*1.22);cursor:pointer;
   filter:drop-shadow(calc(var(--u)*.14) calc(var(--u)*.2) 0 #4a2f0c)}
 .tile .face{position:absolute;inset:0;background:#f3d79a;clip-path:polygon(50% 0,90% 17%,100% 100%,0 100%,10% 17%);display:flex;align-items:center;justify-content:center}
@@ -59,66 +65,95 @@ button:disabled{opacity:.4;cursor:default}
     <ul>
       <li>同じ駒を2枚タップすると、その2枚が消えます。全部消せば、クリアです。</li>
       <li>消せるのは、「上に何も乗っていなくて、左右のどちらかが空いている」駒だけです。色が濃く見える駒は、まだ消せません。</li>
-      <li>はじめから、必ず最後まで消せる並びになっています。順番をまちがえると、行き詰まることはあります。</li>
-      <li>「ヒント」で、いま消せる組を1つ光らせます。「待った」で、1組ぶん戻せます。</li>
-      <li>消せる組が1つもなくなったら、「混ぜ直し」で、残りの駒を並べ替えます(混ぜ直したあとも、必ず最後まで消せます)。</li>
+      <li>はじめから、必ず最後まで消せる並びになっています。順番をまちがえると、行き詰まります。</li>
+      <li>むずかしさは、駒の枚数で決まります(やさしい116枚 / ふつう224枚 / むずかしい320枚)。</li>
+      <li>「ヒント」と「待った」は、1ゲームにつき、どちらも3回までです。混ぜ直しはありません。</li>
+      <li>枚数が多いときは、「＋」で盤を大きくして、指でなぞって動かせます。</li>
       <li>王と玉は、別の駒です(組になりません)。赤い字の駒(成り駒)も、同じ字どうしだけ組になります。</li>
     </ul>
   </details>
-  <div class="bar"><span id="left"></span><span id="info"></span></div>
-  <div class="table"><div id="board"></div></div>
+  <div class="lvs" id="lvs"></div>
+  <div class="bar"><span><span id="left"></span>　<span id="info"></span></span><span class="zoom"><button id="bZo" aria-label="縮小">－</button><button id="bZi" aria-label="拡大">＋</button></span></div>
+  <div class="table" id="table"><div id="board"></div></div>
   <div class="btns">
     <button class="primary" id="bNew">新しいゲーム</button>
     <button id="bUndo">待った</button>
     <button id="bHint">ヒント</button>
-    <button id="bShuf">混ぜ直し</button>
   </div>
   <div class="foot">将棋ソリティア — タコつぼゲームズ</div>
 </div>
 <div class="overlay" id="win"><div class="dlg"><h2>クリア!</h2><p id="winSub"></p><div class="btns" style="margin:0"><button class="primary" id="bNew2">もう一度</button><button id="bClose">盤を見る</button></div></div></div>
+<div class="overlay" id="stuck"><div class="dlg"><h2>行き詰まりました</h2><p id="stuckSub">消せる組がありません。</p><div class="btns" style="margin:0"><button class="primary" id="bNew3">新しいゲーム</button><button id="bUndo3">待った</button><button id="bClose3">盤を見る</button></div></div></div>
 <div id="toast"></div>
 <script>
 (function () {
   const $ = s => document.querySelector(s);
   const KINDS = ['王', '玉', '飛', '角', '金', '銀', '桂', '香', '歩', '龍', '馬', '全', '圭', '杏', 'と'];
   const PROMO = new Set(['龍', '馬', '全', '圭', '杏', 'と']);
+  const MAXHINT = 3, MAXUNDO = 3;
+  const ZM = [1, 1.5, 2, 3];
 
-  /* 亀の形(x,yは半マス単位。1枚=2x2) */
-  const POS = [];
-  const rows0 = [[0, 4, 18], [2, 2, 20], [4, 0, 22], [6, 0, 22], [8, 0, 22], [10, 0, 22], [12, 2, 20], [14, 4, 18]];
-  for (const [y, xs, xe] of rows0) for (let x = xs; x <= xe; x += 2) POS.push({ x, y, z: 0 });
-  for (let y = 4; y <= 10; y += 2) for (let x = 6; x <= 16; x += 2) POS.push({ x, y, z: 1 });
-  for (let y = 6; y <= 8; y += 2) for (let x = 8; x <= 14; x += 2) POS.push({ x, y, z: 2 });
-  const N = POS.length;   // 116
+  /* 盤の形(x,yは半マス単位。1枚=2x2) */
+  function turtle() {
+    const P = [];
+    const rows0 = [[0, 4, 18], [2, 2, 20], [4, 0, 22], [6, 0, 22], [8, 0, 22], [10, 0, 22], [12, 2, 20], [14, 4, 18]];
+    for (const [y, xs, xe] of rows0) for (let x = xs; x <= xe; x += 2) P.push({ x, y, z: 0 });
+    for (let y = 4; y <= 10; y += 2) for (let x = 6; x <= 16; x += 2) P.push({ x, y, z: 1 });
+    for (let y = 6; y <= 8; y += 2) for (let x = 8; x <= 14; x += 2) P.push({ x, y, z: 2 });
+    return P;
+  }
+  function pyr(spec) {   // [z, 列数, 行数, 開始列, 開始行]
+    const P = [];
+    for (const [z, cols, rows, c0, r0] of spec)
+      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) P.push({ x: 2 * (c0 + c), y: 2 * (r0 + r), z });
+    return P;
+  }
+  const LV = [
+    { name: 'やさしい', wd: 24, ht: 16, mk: turtle },
+    { name: 'ふつう', wd: 28, ht: 16, mk: () => pyr([[0, 14, 8, 0, 0], [1, 12, 6, 1, 1], [2, 8, 4, 3, 2], [3, 4, 2, 5, 3]]) },
+    { name: 'むずかしい', wd: 32, ht: 20, mk: () => pyr([[0, 16, 10, 0, 0], [1, 12, 8, 2, 1], [2, 8, 6, 4, 2], [3, 4, 4, 6, 3]]) }
+  ];
 
-  let kind = [], alive = [], sel = -1, undoStack = [], solution = [], hintTimer = null, toastT = null, pairs = 0, over = false;
+  let lv = 0, zi = 0, POS = [], N = 0, UP = [], LF = [], RT = [];
+  let kind = [], alive = [], sel = -1, undoStack = [], solution = [], hintTimer = null, toastT = null, over = false, hintLeft = MAXHINT, undoLeft = MAXUNDO;
+
+  try { const v = +localStorage.getItem('shogiSol.lv'); if (v >= 0 && v < LV.length) lv = v; } catch (e) {}
 
   function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 1800); }
   function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 
-  function isFree(i, set) {   // set: 残っている位置のSet
-    const a = POS[i]; let left = false, right = false;
-    for (const j of set) {
-      if (j === i) continue;
-      const b = POS[j];
-      if (b.z === a.z + 1 && Math.abs(b.x - a.x) < 2 && Math.abs(b.y - a.y) < 2) return false;
-      if (b.z === a.z && Math.abs(b.y - a.y) < 2) { if (b.x === a.x - 2) left = true; if (b.x === a.x + 2) right = true; }
-    }
-    return !(left && right);
+  function prep() {
+    POS = LV[lv].mk(); N = POS.length; UP = []; LF = []; RT = [];
+    POS.forEach((a, i) => {
+      const up = [], l = [], r = [];
+      POS.forEach((b, j) => {
+        if (i === j) return;
+        if (b.z === a.z + 1 && Math.abs(b.x - a.x) < 2 && Math.abs(b.y - a.y) < 2) up.push(j);
+        if (b.z === a.z && Math.abs(b.y - a.y) < 2) { if (b.x === a.x - 2) l.push(j); if (b.x === a.x + 2) r.push(j); }
+      });
+      UP.push(up); LF.push(l); RT.push(r);
+    });
+  }
+  function isFree(i, al) {   // al: 残っている位置の真偽配列
+    for (const j of UP[i]) if (al[j]) return false;
+    let l = false, r = false;
+    for (const j of LF[i]) if (al[j]) { l = true; break; }
+    for (const j of RT[i]) if (al[j]) { r = true; break; }
+    return !(l && r);
   }
   /* 必ず解ける配牌: 取れる2枚を順に取っていく順番どおりに、同じ駒を割り当てる */
   function dealKinds(idxs) {
-    for (let tr = 0; tr < 300; tr++) {
-      const rem = new Set(idxs), order = [];
-      let okFlag = true;
-      while (rem.size) {
-        const free = [...rem].filter(i => isFree(i, rem));
-        if (free.length < 2) { okFlag = false; break; }
-        shuffle(free);
-        const a = free[0], b = free[1];
-        order.push([a, b]); rem.delete(a); rem.delete(b);
+    for (let tr = 0; tr < 4000; tr++) {
+      const rem = new Array(N).fill(false); idxs.forEach(i => { rem[i] = true; });
+      let left = idxs.length, ok = true; const order = [];
+      while (left) {
+        const free = []; for (const i of idxs) if (rem[i] && isFree(i, rem)) free.push(i);
+        if (free.length < 2) { ok = false; break; }
+        const a = free.splice(Math.floor(Math.random() * free.length), 1)[0];
+        const b = free[Math.floor(Math.random() * free.length)];
+        order.push([a, b]); rem[a] = rem[b] = false; left -= 2;
       }
-      if (!okFlag) continue;
+      if (!ok) continue;
       const ks = []; for (let i = 0; i < order.length; i++) ks.push(i % KINDS.length);
       shuffle(ks);
       const res = {};
@@ -128,12 +163,25 @@ button:disabled{opacity:.4;cursor:default}
     return null;
   }
 
+  function setLevel(n) {
+    lv = n; prep(); zi = 0;
+    try { localStorage.setItem('shogiSol.lv', String(lv)); } catch (e) {}
+    const b = $('#board'); b.style.setProperty('--wd', LV[lv].wd); b.style.setProperty('--ht', LV[lv].ht);
+    $('#lvs').innerHTML = LV.map((L, i) => { const n2 = L.mk().length; return `<button data-lv="${i}" class="${i === lv ? 'on' : ''}">${L.name}<small>${n2}枚</small></button>`; }).join('');
+    newGame();
+  }
+  function applyZoom() {
+    $('#board').style.setProperty('--zm', ZM[zi]);
+    $('#bZo').disabled = zi === 0; $('#bZi').disabled = zi === ZM.length - 1;
+  }
   function newGame() {
-    const all = POS.map((_, i) => i), d = dealKinds(all);
+    const all = POS.map((_, i) => i);
+    let d = dealKinds(all); for (let k = 0; !d && k < 5; k++) d = dealKinds(all);
     kind = all.map(i => d.res[i]); alive = all.map(() => true); solution = d.order.slice();
-    sel = -1; undoStack = []; over = false; pairs = 0;
-    $('#win').classList.remove('on');
-    build(); update();
+    sel = -1; undoStack = []; over = false; hintLeft = MAXHINT; undoLeft = MAXUNDO;
+    $('#win').classList.remove('on'); $('#stuck').classList.remove('on');
+    applyZoom(); build(); update();
+    $('#table').scrollTo && $('#table').scrollTo(0, 0);
   }
   function build() {
     const order = POS.map((_, i) => i).sort((a, b) => POS[a].z - POS[b].z || POS[a].y - POS[b].y || POS[a].x - POS[b].x);
@@ -144,69 +192,92 @@ button:disabled{opacity:.4;cursor:default}
     }
     $('#board').innerHTML = h;
   }
-  function remainingSet() { const s = new Set(); alive.forEach((a, i) => { if (a) s.add(i); }); return s; }
-  function freeList() { const s = remainingSet(); return [...s].filter(i => isFree(i, s)); }
+  function freeList() { const f = []; for (let i = 0; i < N; i++) if (alive[i] && isFree(i, alive)) f.push(i); return f; }
   function movesAvail() {
     const f = freeList(), by = {};
     for (const i of f) (by[kind[i]] = by[kind[i]] || []).push(i);
     const out = []; for (const k in by) for (let a = 0; a < by[k].length; a++) for (let b = a + 1; b < by[k].length; b++) out.push([by[k][a], by[k][b]]);
     return out;
   }
+  function count() { let c = 0; for (let i = 0; i < N; i++) if (alive[i]) c++; return c; }
   function update() {
-    const s = remainingSet(), f = new Set([...s].filter(i => isFree(i, s)));
+    const f = new Set(freeList());
     document.querySelectorAll('.tile').forEach(el => {
       const i = +el.dataset.i;
       if (!alive[i]) { el.style.display = 'none'; return; }
       el.style.display = ''; el.classList.toggle('blocked', !f.has(i)); el.classList.toggle('sel', i === sel);
     });
-    const left = s.size;
+    const left = count();
     $('#left').textContent = `残り ${left}枚`;
     $('#info').textContent = left ? `消せる組 ${movesAvail().length}` : '';
-    $('#bUndo').disabled = !undoStack.length;
-    $('#bShuf').disabled = !left;
-    $('#bHint').disabled = !left;
+    $('#bUndo').textContent = `待った(残り${undoLeft})`;
+    $('#bHint').textContent = `ヒント(残り${hintLeft})`;
+    $('#bUndo').disabled = !undoStack.length || undoLeft <= 0;
+    $('#bHint').disabled = !left || hintLeft <= 0;
   }
   function removePair(a, b) {
     alive[a] = alive[b] = false; undoStack.push([a, b]); sel = -1;
     update();
-    if (!remainingSet().size) { over = true; $('#winSub').textContent = `${undoStack.length}組、全部消しました`; $('#win').classList.add('on'); return; }
-    if (!movesAvail().length) toast('消せる組がありません。「混ぜ直し」を押してください');
+    if (!count()) { over = true; $('#winSub').textContent = `${undoStack.length}組、全部消しました`; $('#win').classList.add('on'); return; }
+    if (!movesAvail().length) {
+      over = true;
+      $('#stuckSub').textContent = undoLeft > 0 ? `消せる組がありません。「待った」はあと${undoLeft}回使えます。` : '消せる組がありません。「待った」も使い切りました。';
+      $('#bUndo3').disabled = undoLeft <= 0;
+      $('#stuck').classList.add('on');
+    }
   }
   $('#board').addEventListener('click', e => {
     if (over) return;
     const el = e.target.closest('.tile'); if (!el) return;
     clearHint();
     const i = +el.dataset.i; if (!alive[i]) return;
-    const s = remainingSet();
-    if (!isFree(i, s)) { toast('ふさがっています(上に駒があるか、左右が両方ふさがっています)'); return; }
+    if (!isFree(i, alive)) { toast('ふさがっています(上に駒があるか、左右が両方ふさがっています)'); return; }
     if (sel === i) { sel = -1; update(); return; }
     if (sel >= 0 && kind[sel] === kind[i]) { removePair(sel, i); return; }
     sel = i; update();
   });
   function clearHint() { document.querySelectorAll('.tile.hint').forEach(n => n.classList.remove('hint')); clearTimeout(hintTimer); }
   $('#bHint').addEventListener('click', () => {
-    if (over) return;
-    const m = movesAvail(); if (!m.length) { toast('消せる組がありません。「混ぜ直し」を押してください'); return; }
-    clearHint(); const [a, b] = m[Math.floor(Math.random() * m.length)];
-    document.querySelector(`.tile[data-i="${a}"]`).classList.add('hint'); document.querySelector(`.tile[data-i="${b}"]`).classList.add('hint');
-    hintTimer = setTimeout(clearHint, 1800);
+    if (over || hintLeft <= 0) return;
+    const m = movesAvail(); if (!m.length) return;
+    clearHint();
+    /* 最初に決めた解の順に沿った組が、まだ消せるなら、それを優先する */
+    let pick = null;
+    for (const [a, b] of solution) { if (alive[a] && alive[b] && isFree(a, alive) && isFree(b, alive)) { pick = [a, b]; break; } }
+    if (!pick) pick = m[Math.floor(Math.random() * m.length)];
+    hintLeft--; sel = -1; update();
+    document.querySelector(`.tile[data-i="${pick[0]}"]`).classList.add('hint'); document.querySelector(`.tile[data-i="${pick[1]}"]`).classList.add('hint');
+    hintTimer = setTimeout(clearHint, 2200);
   });
-  $('#bUndo').addEventListener('click', () => {
-    if (!undoStack.length) return;
-    const [a, b] = undoStack.pop(); alive[a] = alive[b] = true; sel = -1; over = false; $('#win').classList.remove('on'); update();
+  function undo() {
+    if (!undoStack.length || undoLeft <= 0) return;
+    const [a, b] = undoStack.pop(); alive[a] = alive[b] = true; undoLeft--; sel = -1; over = false;
+    $('#win').classList.remove('on'); $('#stuck').classList.remove('on'); clearHint(); update();
+  }
+  $('#bUndo').addEventListener('click', undo);
+  $('#bUndo3').addEventListener('click', undo);
+  $('#bNew').addEventListener('click', () => {
+    if (!over && undoStack.length && !confirm('いまのゲームをやめて、新しく始めますか?')) return;
+    newGame();
   });
-  $('#bShuf').addEventListener('click', () => {
-    if (over) return;
-    const idxs = [...remainingSet()], d = dealKinds(idxs);
-    if (!d) { toast('混ぜ直せませんでした。もう一度押してください'); return; }
-    idxs.forEach(i => { kind[i] = d.res[i]; });
-    solution = d.order.slice(); sel = -1; build(); update(); toast('混ぜ直しました');
-  });
-  $('#bNew').addEventListener('click', newGame);
   $('#bNew2').addEventListener('click', newGame);
+  $('#bNew3').addEventListener('click', newGame);
   $('#bClose').addEventListener('click', () => $('#win').classList.remove('on'));
-  window.__kp = { get kind() { return kind; }, get alive() { return alive; }, get solution() { return solution; }, get N() { return N; }, newGame, movesAvail, get over() { return over; }, isFree, remainingSet, KINDS };
-  newGame();
+  $('#bClose3').addEventListener('click', () => $('#stuck').classList.remove('on'));
+  $('#lvs').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const n = +b.dataset.lv; if (n === lv) return;
+    if (!over && undoStack.length && !confirm('いまのゲームをやめて、難易度を変えますか?')) return;
+    setLevel(n);
+  });
+  $('#bZi').addEventListener('click', () => { if (zi < ZM.length - 1) { zi++; applyZoom(); } });
+  $('#bZo').addEventListener('click', () => { if (zi > 0) { zi--; applyZoom(); } });
+  window.__kp = {
+    get kind() { return kind; }, get alive() { return alive; }, get solution() { return solution; }, get N() { return N; }, get POS() { return POS; },
+    get over() { return over; }, get lv() { return lv; }, get hintLeft() { return hintLeft; }, get undoLeft() { return undoLeft; },
+    newGame, setLevel, movesAvail, isFree, KINDS, dealKinds, count
+  };
+  setLevel(lv);
 })();
 </script>
 </body>
