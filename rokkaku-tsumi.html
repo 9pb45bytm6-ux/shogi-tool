@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>六角つみ — タコつぼゲームズ</title>
+<title>六角パズル — タコつぼゲームズ</title>
 <meta name="description" content="六角形のマスに色つきのタイルの山を置いて、同じ色を集めて消すパズル。置けるマスがなくなるまで、いつまでも続けられます。盤の形は5種類。無料のブラウザゲームです。">
 <style>
 :root{
@@ -54,7 +54,7 @@ button:disabled{opacity:.4;cursor:default}
 <body>
 <div class="wrap">
   <a class="home" href="games.html">🏠 タコつぼゲームズ</a>
-  <h1>六角つみ</h1>
+  <h1>六角パズル</h1>
   <p class="sub">色とりどりのタイルの山を置いて、同じ色を集めて消す。置けるマスがなくなるまで続きます。</p>
   <details class="how">
     <summary>あそびかた</summary>
@@ -76,7 +76,7 @@ button:disabled{opacity:.4;cursor:default}
   <div class="btns">
     <button class="primary" id="bNew">新しいゲーム</button>
   </div>
-  <div class="foot">六角つみ — タコつぼゲームズ</div>
+  <div class="foot">六角パズル — タコつぼゲームズ</div>
 </div>
 <div class="overlay" id="over"><div class="dlg"><h2>詰み!</h2><p id="overSub"></p><div class="btns" style="margin:0"><button class="primary" id="bAgain">もう一度</button><button id="bView">盤を見る</button></div></div></div>
 <div id="toast"></div>
@@ -106,8 +106,9 @@ button:disabled{opacity:.4;cursor:default}
     { f: '#148f77', d: '#0a5c4b', n: '青緑' }
   ];
   /* むずかしさの調整つまみ */
+  const MAX_COLORS = 10;
   const CFG = { start: 6, step: 50, rep: 0.15, h: [0.2, 0.4, 0.3, 0.1], bias: 3 };
-  function colorCount(score) { return Math.min(CFG.start + Math.floor(score / CFG.step), COLORS.length); }
+  function colorCount(score) { return Math.min(CFG.start + Math.floor(score / CFG.step), Math.min(COLORS.length, MAX_COLORS)); }
 
   /* 盤の形: [列, 行2] の一覧。(列+行2)が偶数のとき、そのマスがある。行2は半マス単位 */
   function fromCols(spec) { const a = []; for (const [c, r0, n] of spec) for (let k = 0; k < n; k++) a.push([c, r0 + 2 * k]); return a; }
