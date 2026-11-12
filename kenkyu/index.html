@@ -996,7 +996,7 @@ function bmHTML(r) {
   return h + `</div>`;
 }
 
-/* ---------- テーマ図(しおり): 研究を開いたとき、この局面から始める ----------
+/* ---------- テーマ図(しおり): 研究を開いたとき、この局面から始める ---------- */
 function themePath(r) {
   if (!r || !r.theme || !r.nodes[r.theme]) return [];
   return findPathTo(r, r.theme) || [];
