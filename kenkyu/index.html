@@ -59,6 +59,11 @@
   .main-row { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
   .side-col { min-width: 220px; flex: 1; height: 480px; overflow-y: auto; }
   @media (max-width: 700px) { .side-col { height: 340px; } }
+  .bmbox { background: #fffdf5; border: 1px solid #e3d6a8; border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+  .bmlist { margin-top: 6px; max-height: 150px; overflow-y: auto; }
+  .bmitem { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 4px 2px; border-bottom: 1px dashed #eadfb8; }
+  .bmitem.here { background: #fff3c4; }
+  .bmgo { cursor: pointer; flex: 1; text-decoration: underline; word-break: break-all; }
   .navrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; min-height: 34px; }
   .slot { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; min-height: 34px; margin-bottom: 8px; }
   .slot .warn, .slot .tip { margin: 0; }
@@ -913,6 +918,7 @@ function mergeResearches(target, source) {
     side: target.side || source.side || null, tags,
     sourceNote, rootPly, root, nodes, mergeDeclined: declined,
     theme: [target.theme, source.theme].find(h => h && nodes[h]) || undefined,
+    bookmarks: [...(target.bookmarks || []), ...(source.bookmarks || [])].filter(b => b && nodes[b.hash]),
   };
 }
 
@@ -925,7 +931,6 @@ function findMergeCandidates(cur, list) {
     if (cur.id && r.id === cur.id) return;
     if ((cur.mergeDeclined || []).includes(r.id)) return;
     if (cur.id && (r.mergeDeclined || []).includes(cur.id)) return;
-    if (cur.side && r.side && cur.side !== r.side) return; // 先手側と後手側の研究は統合を勧めない
     const ov = analyzeOverlap(cur, r);
     let reason = null;
     if (ov.deepest >= minPly) reason = `${minPly}手目以降の共通局面あり(最も深い共通局面は${ov.deepest}手目)`;
@@ -960,7 +965,38 @@ function findPathTo(research, targetHash) {
   return null;
 }
 
-/* ---------- テーマ図(しおり): 研究を開いたとき、この局面から始める ---------- */
+/* ---------- 栞(複数・あとで調べる): 研究ごとに、局面にメモつきの印を何個でも付ける ----------
+   research.bookmarks = [{ id, hash, label, at }]。局面が削除で消えたら、その栞も消える(削除を戻すと復活する) */
+let BM_OPEN = false;
+function bmList(r) { return (r && Array.isArray(r.bookmarks)) ? r.bookmarks.filter(b => b && r.nodes[b.hash]) : []; }
+function bmAdd(r, hash, label) {
+  if (!r.bookmarks) r.bookmarks = [];
+  const b = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), hash, label: (label || "").trim(), at: new Date().toISOString() };
+  r.bookmarks.push(b); return b;
+}
+function bmRemove(r, id) { if (!r.bookmarks) return; r.bookmarks = r.bookmarks.filter(b => b.id !== id); }
+function bmPly(r, hash) {
+  const path = findPathTo(r, hash); if (!path) return "";
+  return (r.rootPly === null || r.rootPly === undefined) ? `開始から${path.length}手` : `${r.rootPly + path.length}手目`;
+}
+function bmCountAt(r, hash) { return bmList(r).filter(b => b.hash === hash).length; }
+function bmHTML(r) {
+  const list = bmList(r);
+  let h = `<div class="bmbox"><div class="row"><input type="text" id="bmLabel" placeholder="メモ(例: ここの変化をあとで調べる)" style="flex:1; min-width:140px;"><button id="btnAddBm" style="padding:4px 12px; font-size:12px;">＋ここに栞を付ける</button></div>`;
+  if (!list.length) h += `<div class="small" style="margin-top:6px;">栞はまだありません。調べたい局面で、メモを入れて「＋ここに栞を付ける」を押すと、あとでここから戻れます。</div>`;
+  else {
+    const cur = currentHash();
+    h += `<div class="bmlist">`;
+    list.forEach(b => {
+      const here = b.hash === cur;
+      h += `<div class="bmitem${here ? " here" : ""}"><span class="bmgo" data-bmgo="${b.id}">🔖 ${(b.label || "(メモなし)").replace(/</g,"&lt;")} <span class="small">${bmPly(r, b.hash)}${here ? " ・いまここ" : ""}</span></span><button class="secondary" data-bmdel="${b.id}" style="padding:2px 8px; font-size:11px;">消す</button></div>`;
+    });
+    h += `</div>`;
+  }
+  return h + `</div>`;
+}
+
+/* ---------- テーマ図(しおり): 研究を開いたとき、この局面から始める ----------
 function themePath(r) {
   if (!r || !r.theme || !r.nodes[r.theme]) return [];
   return findPathTo(r, r.theme) || [];
@@ -1026,7 +1062,7 @@ function treeHTML(research, L, pathKeys, curHash) {
     if (b.marker) cls += " mk";
     if (onPath(b)) cls += " on";
     if (b.i === curIdx) cls += " cur";
-    boxes += `<div class="${cls}" data-i="${b.i}" style="left:${X(b)}px;top:${Y(b)}px;width:${TREE_W}px;">${label}${note}${isTheme ? "★" : ""}</div>`;
+    boxes += `<div class="${cls}" data-i="${b.i}" style="left:${X(b)}px;top:${Y(b)}px;width:${TREE_W}px;">${label}${note}${isTheme ? "★" : ""}${(!b.marker && bmCountAt(research, b.hash)) ? "🔖" : ""}</div>`;
   });
   return `<div class="tree-canvas" style="width:${W}px;height:${H}px;"><svg class="tree-svg" width="${W}" height="${H}">${lines}</svg>${boxes}</div>`;
 }
@@ -1050,16 +1086,17 @@ function deletionPlan(research, parentHash, mvKey) {
   const before = reachableSet(research, null, null), after = reachableSet(research, parentHash, mvKey);
   const removed = Array.from(before).filter(h => !after.has(h));
   const notes = removed.filter(h => (research.nodes[h].note || "").trim()).length;
-  return { parentHash, mvKey, removed, notes, themeLost: !!(research.theme && removed.indexOf(research.theme) >= 0) };
+  return { parentHash, mvKey, removed, notes, themeLost: !!(research.theme && removed.indexOf(research.theme) >= 0), bmLost: bmList(research).filter(b => removed.indexOf(b.hash) >= 0).length };
 }
 function applyDeletion(research, plan) {
   const pn = research.nodes[plan.parentHash];
   if (!pn.order) pn.order = Object.keys(pn.edges);
   const entry = { research, parentHash: plan.parentHash, order: edgeKeys(pn), edge: pn.edges[plan.mvKey], mvKey: plan.mvKey,
-    nodes: {}, theme: research.theme, path: PATH.slice() };
+    nodes: {}, theme: research.theme, bookmarks: (research.bookmarks || []).slice(), path: PATH.slice() };
   delete pn.edges[plan.mvKey];
   plan.removed.forEach(h => { entry.nodes[h] = research.nodes[h]; delete research.nodes[h]; });
   if (plan.themeLost) delete research.theme;
+  if (research.bookmarks) research.bookmarks = research.bookmarks.filter(b => plan.removed.indexOf(b.hash) < 0);
   return entry;
 }
 function undoDeletion(entry) {
@@ -1070,6 +1107,7 @@ function undoDeletion(entry) {
   Object.keys(old).forEach(k => { if (!(k in rebuilt)) rebuilt[k] = old[k]; });
   pn.edges = rebuilt; pn.order = entry.order.slice();
   if (entry.theme) r.theme = entry.theme;
+  if (entry.bookmarks) r.bookmarks = entry.bookmarks.slice();
 }
 function repairPath() { // 削除で消えた局面より先のPATHを切り詰める
   let h = CURRENT.root; const out = [];
@@ -1091,6 +1129,7 @@ function deleteMoveWithConfirm(parentHash, mvKey) {
   if (plan.removed.length) msg += `この手より先の局面 ${plan.removed.length}個(メモ ${plan.notes}件)が消える。\n別の手順で合流している局面は残る。`;
   else msg += `この手の先の局面は、別の手順でも到達できるので消えない(この手の記録だけが消える)。`;
   if (plan.themeLost) msg += `\nテーマ図もこの先にあるため、解除される。`;
+  if (plan.bmLost) msg += `\nこの先にある栞 ${plan.bmLost}個も消える。`;
   msg += `\n\n削除後は「削除を元に戻す」ボタンで戻せる。`;
   if (!confirm(msg)) return false;
   UNDO_STACK.push(applyDeletion(CURRENT, plan));
@@ -1432,7 +1471,6 @@ function editTapHandChip(side, code) {
 function editTapZone(zone) { if (EDIT.sel) editDropTo(zone); }
 function editStartResearch() {
   const E = EDIT;
-  if (!E.side) return { ok: false, message: "自分が先手側か後手側かを選んでほしい。" };
   const v = validatePosition(E.board, E.hands, E.turn);
   if (v.errors.length) return { ok: false, message: v.errors[0] };
   const hash = encodeStateCompact(E.board, E.hands, E.turn);
@@ -1457,8 +1495,6 @@ function renderPositionEditor() {
       <select id="editTmpl">${EDIT_TEMPLATES.map(t => `<option value="${t.id}" ${t.id===E.tmpl?"selected":""}>${t.name}</option>`).join("")}</select>
       <span class="small">手番:</span>
       <select id="editTurn"><option value="S" ${E.turn==="S"?"selected":""}>先手番</option><option value="G" ${E.turn==="G"?"selected":""}>後手番</option></select>
-      <span class="small">自分は:</span>
-      <select id="editSide"><option value="" ${!E.side?"selected":""}>(選んでほしい)</option><option value="S" ${E.side==="S"?"selected":""}>先手側</option><option value="G" ${E.side==="G"?"selected":""}>後手側</option></select>
       <button class="secondary" id="editFlip" style="padding:3px 10px; font-size:11px;">盤を反転</button>
     </div></div>`;
   const sel = E.sel, bc = boxCounts(E);
@@ -1518,7 +1554,6 @@ function renderPositionEditor() {
     const side = EDIT.side; EDIT = newEditState(e.target.value); EDIT.side = side; renderPositionEditor();
   };
   document.getElementById("editTurn").onchange = (e) => { EDIT.turn = e.target.value; EDIT.dirty = true; renderPositionEditor(); };
-  document.getElementById("editSide").onchange = (e) => { EDIT.side = e.target.value || null; EDIT.flip = null; renderPositionEditor(); };
   document.getElementById("editFlip").onclick = () => { EDIT.flip = !flip; renderPositionEditor(); };
   document.getElementById("editCancel").onclick = () => { EDIT = null; renderEditorTab(); };
   document.getElementById("editStart").onclick = () => {
@@ -1741,8 +1776,7 @@ function applyImports(items, list, mode, decide) {
   let work = list.slice();
   items.forEach(item => {
     const r = item.research;
-    if (!r || !item.side) { summary.skipped++; return; }
-    r.side = item.side;
+    if (!r) { summary.skipped++; return; }
     if (item.tags && item.tags.length) r.tags = Array.from(new Set([...(r.tags || []), ...item.tags]));
     let mergedInto = null;
     if (mode !== "none") {
@@ -1785,17 +1819,12 @@ function renderImportPreview() {
   const Q = IMPORTQ;
   const el = document.getElementById("panel-editor");
   let html = `<div class="card"><div style="font-weight:800; margin-bottom:6px;">.kifの取り込み(${Q.items.length}ファイル)</div>
-    <div class="small" style="margin-bottom:8px;">先手側の研究か後手側の研究かを、ファイルごとに選んでほしい(名前が自分のIDと一致したものは自動で選んである)。</div>
-    <div class="row" style="margin-bottom:8px;">
-      <button class="secondary" id="impAllS" style="padding:3px 10px; font-size:11px;">全部を先手側にする</button>
-      <button class="secondary" id="impAllG" style="padding:3px 10px; font-size:11px;">全部を後手側にする</button>
-    </div>`;
-  html += `<table class="data"><thead><tr><th>ファイル</th><th>内容</th><th>自分は</th></tr></thead><tbody>`;
+    `;
+  html += `<table class="data"><thead><tr><th>ファイル</th><th>内容</th></tr></thead><tbody>`;
   Q.items.forEach((it, i) => {
     const ok = !!it.research;
     html += `<tr><td>${it.fileName}</td><td class="small">${ok ? `${it.research.title || ""}<br>${it.plyMain}手${it.variations ? ` / 変化${it.variations}本` : ""} / ${it.nodeCount}局面` : "取り込めない"}
-      ${it.errors.map(e => `<div class="warn" style="margin-top:4px;">${e}</div>`).join("")}</td>
-      <td>${ok ? `<select data-impside="${i}"><option value="" ${!it.side?"selected":""}>(選ぶ)</option><option value="S" ${it.side==="S"?"selected":""}>先手側</option><option value="G" ${it.side==="G"?"selected":""}>後手側</option></select>` : "-"}</td></tr>`;
+      ${it.errors.map(e => `<div class="warn" style="margin-top:4px;">${e}</div>`).join("")}</td></tr>`;
   });
   html += `</tbody></table>`;
   html += `<div class="row" style="margin-top:10px;"><span class="small">全部に付けるタグ(カンマ区切り・任意):</span><input type="text" id="impTags" value="${(Q.tagsText||"").replace(/"/g,"&quot;")}" list="tagHints" style="width:240px;"></div>
@@ -1804,9 +1833,6 @@ function renderImportPreview() {
     <select id="impMode"><option value="ask" ${Q.mode==="ask"?"selected":""}>1件ずつ確認する</option><option value="all" ${Q.mode==="all"?"selected":""}>該当するものは全部統合する</option><option value="none" ${Q.mode==="none"?"selected":""}>統合せず別々に保存する</option></select></div>`;
   html += `<div class="row" style="margin-top:10px;"><button id="impGo">取り込む</button><button class="secondary" id="impCancel">やめる</button></div></div>`;
   el.innerHTML = html;
-  el.querySelectorAll("[data-impside]").forEach(sel => { sel.onchange = () => { Q.items[parseInt(sel.dataset.impside, 10)].side = sel.value || null; }; });
-  document.getElementById("impAllS").onclick = () => { Q.items.forEach(it => { if (it.research) it.side = "S"; }); renderImportPreview(); };
-  document.getElementById("impAllG").onclick = () => { Q.items.forEach(it => { if (it.research) it.side = "G"; }); renderImportPreview(); };
   document.getElementById("impTags").onchange = (e) => { Q.tagsText = e.target.value; };
   document.getElementById("impMode").onchange = (e) => { Q.mode = e.target.value; };
   document.getElementById("impCancel").onclick = () => { IMPORTQ = null; renderEditorTab(); };
@@ -1815,7 +1841,6 @@ function renderImportPreview() {
 async function runImport() {
   const Q = IMPORTQ;
   const targets = Q.items.filter(it => it.research);
-  if (targets.some(it => !it.side)) { alert("先手側か後手側かが選ばれていないファイルがある。"); return; }
   const tags = (Q.tagsText || "").split(/[,、]/).map(x => x.trim()).filter(Boolean);
   targets.forEach(it => { it.tags = tags; });
   const btn = document.getElementById("impGo"); if (btn) { btn.disabled = true; btn.textContent = "取り込み中..."; }
@@ -1864,8 +1889,7 @@ function renderEditorTab() {
       }
     }
     html += `<div class="row" style="margin-top:8px;">
-      <button class="secondary" id="btnScratchS">初期局面から新規(先手側の研究)</button>
-      <button class="secondary" id="btnScratchG">初期局面から新規(後手側の研究)</button>
+      <button class="secondary" id="btnScratch">初期局面から新規</button>
     </div>`;
     html += `<div class="row" style="margin-top:8px;"><button class="secondary" id="btnPosEdit">局面を編集して始める(駒落ち・任意の局面)</button>
       <button class="secondary" id="btnKifImport">.kifファイルから取り込む</button>
@@ -1881,11 +1905,8 @@ function renderEditorTab() {
       IMPORTQ = { items, mode: "ask", tagsText: "" };
       renderEditorTab();
     };
-    document.getElementById("btnScratchS").onclick = () => {
-      CURRENT = newEmptyResearch(null, "S"); PATH = []; SELECTED = null; renderEditorTab();
-    };
-    document.getElementById("btnScratchG").onclick = () => {
-      CURRENT = newEmptyResearch(null, "G"); PATH = []; SELECTED = null; renderEditorTab();
+    document.getElementById("btnScratch").onclick = () => {
+      CURRENT = newEmptyResearch(null, null); PATH = []; SELECTED = null; renderEditorTab();
     };
     const bhNew = document.getElementById("btnFromHandoffNew");
     if (bhNew) bhNew.onclick = () => {
@@ -1919,12 +1940,6 @@ function renderEditorTab() {
     </div>
     <div class="small" style="margin-top:6px;">開始: ${CURRENT.sourceNote}</div>
     <div class="row" style="margin-top:8px;">
-      <span class="small">自分は</span>
-      <select id="sideSel">
-        <option value="" ${!CURRENT.side?"selected":""}>(未設定)</option>
-        <option value="S" ${CURRENT.side==="S"?"selected":""}>先手側</option>
-        <option value="G" ${CURRENT.side==="G"?"selected":""}>後手側</option>
-      </select>
       <button class="secondary" id="btnFlip" style="padding:3px 10px; font-size:11px;">盤を反転</button>
     </div>
     <div style="margin-top:8px; min-height:34px;" id="tagArea"></div>
@@ -1933,14 +1948,18 @@ function renderEditorTab() {
   { // 操作行(ボタンの数は常に同じ。使えないものは薄くする。高さが変わらないようにするため)
     const isTheme = !!(CURRENT.theme && currentHash() === CURRENT.theme);
     const hasTheme = !!(CURRENT.theme && CURRENT.nodes[CURRENT.theme]);
+    const hasNext = (() => { const nd = currentNode(); return !!(nd && edgeKeys(nd).some(x => CURRENT.nodes[nd.edges[x].to])); })();
     const bs = `padding:4px 12px; font-size:12px;`;
     html += `<div class="navrow" title="${CURRENT.theme ? "次回から★の局面で開きます" : "設定すると、次回からこの局面で開きます"}">
       <button class="secondary" id="btnBack" style="${bs}" ${PATH.length ? "" : "disabled"}>◀ 1手戻る</button>
+      <button class="secondary" id="btnNext" style="${bs}" ${hasNext ? "" : "disabled"}>次へ ▶</button>
       <button class="secondary" id="btnSetTheme" style="${bs}">${isTheme ? "★ テーマ図を解除" : "☆ ここをテーマ図にする"}</button>
       <button class="secondary" id="btnToTheme" style="${bs}" ${hasTheme && !isTheme ? "" : "disabled"}>★ テーマ図へ</button>
       <button class="secondary" id="btnToRoot" style="${bs}" ${PATH.length ? "" : "disabled"}>最初の局面へ</button>
+      <button class="secondary" id="btnBm" style="${bs}">🔖 栞(${bmList(CURRENT).length}) ${BM_OPEN ? "▲" : "▼"}</button>
       <button class="secondary" id="btnUndoDel" style="${bs}" ${lastUndo() >= 0 ? "" : "disabled"}>↩ 削除を戻す</button>
     </div>`;
+    if (BM_OPEN) html += bmHTML(CURRENT);
   }
 
   { // メッセージ欄(高さ固定。王手・詰み・スキップの結果をここに出す)
@@ -1999,13 +2018,24 @@ function renderEditorTab() {
       PATH.push({ mv: edge.mv, hash: edge.to }); SELECTED = null; renderEditorTab();
     };
   });
-  document.getElementById("sideSel").onchange = (e) => { CURRENT.side = e.target.value || null; CURRENT._flip = null; renderEditorTab(); };
   document.getElementById("btnFlip").onclick = () => { CURRENT._flip = !viewFlipped(); renderEditorTab(); };
   document.getElementById("btnSetTheme").onclick = () => {
     if (CURRENT.theme && currentHash() === CURRENT.theme) delete CURRENT.theme; else CURRENT.theme = currentHash();
     renderEditorTab();
   };
   const bTT = document.getElementById("btnToTheme"); if (bTT) bTT.onclick = () => { PATH = themePath(CURRENT); SELECTED = null; renderEditorTab(); };
+  const bNx = document.getElementById("btnNext"); if (bNx) bNx.onclick = () => { if (stepKey(1)) renderEditorTab(); };
+  document.getElementById("btnBm").onclick = () => { BM_OPEN = !BM_OPEN; renderEditorTab(); };
+  { const ba = document.getElementById("btnAddBm"); if (ba) ba.onclick = () => {
+      const inp = document.getElementById("bmLabel"); bmAdd(CURRENT, currentHash(), inp ? inp.value : ""); renderEditorTab();
+    };
+    document.querySelectorAll("[data-bmgo]").forEach(el => { el.onclick = () => {
+      const b = bmList(CURRENT).find(x => x.id === el.dataset.bmgo); if (!b) return;
+      const path = findPathTo(CURRENT, b.hash); if (!path) { alert("この栞の局面へは、いまの手順からたどれない。"); return; }
+      PATH = path; SELECTED = null; renderEditorTab();
+    }; });
+    document.querySelectorAll("[data-bmdel]").forEach(el => { el.onclick = () => { bmRemove(CURRENT, el.dataset.bmdel); renderEditorTab(); }; });
+  }
   const bTR = document.getElementById("btnToRoot"); if (bTR) bTR.onclick = () => { PATH = []; SELECTED = null; renderEditorTab(); };
   const bUD = document.getElementById("btnUndoDel"); if (bUD) bUD.onclick = () => {
     const i = lastUndo(); if (i < 0) return;
@@ -2043,7 +2073,6 @@ function renderEditorTab() {
   };
   document.getElementById("btnSaveResearch").onclick = async () => {
     flushTagInput();
-    if (!CURRENT.side) { alert("先手側の研究か後手側の研究かを選んでから保存してほしい。"); return; }
     const btn = document.getElementById("btnSaveResearch");
     btn.disabled = true; btn.textContent = "保存中...";
     const list = loadResearches();
@@ -2105,16 +2134,14 @@ function renderListTab() {
   }
   html += `<div class="row" style="margin-bottom:8px;">
     <button class="secondary" id="btnMergeSelected" disabled>選択した2件を統合</button>
-    <span class="small">統合したい研究を2件チェックする / 行をダブルタップ(ダブルクリック)で開く</span>
+    <span class="small">統合したい研究を2件チェックする</span>
   </div>`;
-  html += `<div style="overflow-x:auto;"><table class="data"><thead><tr><th></th><th>タイトル</th><th>自分側</th><th>タグ</th><th>開始</th><th>作成日</th><th></th></tr></thead><tbody>`;
+  html += `<div style="overflow-x:auto;"><table class="data"><thead><tr><th></th><th>タイトル</th><th>タグ</th><th>作成日</th><th></th></tr></thead><tbody>`;
   list.slice().reverse().filter(r => !LIST_TAG_FILTER || (r.tags || []).includes(LIST_TAG_FILTER)).forEach(r => {
-    html += `<tr data-rowid="${r.id}" style="touch-action:manipulation; -webkit-user-select:none; user-select:none; cursor:pointer;">
+    html += `<tr>
       <td><input type="checkbox" data-selid="${r.id}"></td>
       <td class="wrap">${r.title || "(無題)"}</td>
-      <td>${r.side==="S"?"先手側":r.side==="G"?"後手側":"未設定"}</td>
       <td>${(r.tags||[]).map(t=>`<span class="chip">${t}</span>`).join("")}</td>
-      <td>${r.sourceNote}</td>
       <td>${(r.createdAt||"").slice(0,10)}</td>
       <td>
         <button class="secondary" data-openid="${r.id}" style="padding:3px 8px; font-size:11px;">開く</button>
@@ -2153,29 +2180,14 @@ function renderListTab() {
     await saveResearches(newList);
     renderListTab();
   };
-  const openById = (id) => {
-    const list2 = loadResearches();
-    const found = list2.find(r => String(r.id)===String(id));
-    if (!found) return;
-    openResearch(found);
-    switchTab("editor");
-  };
   el.querySelectorAll("[data-openid]").forEach(btn => {
-    btn.onclick = () => openById(btn.dataset.openid);
-  });
-  // 行のダブルタップ/ダブルクリックで開く(チェックボックス・ボタン・タグ上は除く)
-  let lastTap = { id: null, t: 0 };
-  el.querySelectorAll("tr[data-rowid]").forEach(tr => {
-    tr.addEventListener("click", (e) => {
-      if (e.target.closest("button, input, .chip")) { lastTap = { id: null, t: 0 }; return; }
-      const now = Date.now(), id = tr.dataset.rowid;
-      if (lastTap.id === id && now - lastTap.t < 400) {
-        lastTap = { id: null, t: 0 };
-        openById(id);
-      } else {
-        lastTap = { id, t: now };
-      }
-    });
+    btn.onclick = () => {
+      const list2 = loadResearches();
+      const found = list2.find(r => String(r.id)===btn.dataset.openid);
+      if (!found) return;
+      openResearch(found);
+      switchTab("editor");
+    };
   });
   el.querySelectorAll("[data-delid]").forEach(btn => {
     btn.onclick = async () => {
